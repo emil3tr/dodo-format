@@ -1,0 +1,3 @@
++ Checking if a char is whitespace, name allowed, ... is probably inefficient. Make an array
+with bitflags instead and index the char into that for O(1).
++ Non-UTF8 support
