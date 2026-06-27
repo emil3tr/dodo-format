@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
+#include <stack>
 
 namespace dodo {
 
@@ -90,30 +91,36 @@ constexpr bool IS_ALLOWED_IN_NAME(int c)
 {
     return !(IS_BRACKET(c) || IS_WHITESPACE(c) || (c == CHAR_COLON) || (c == CHAR_EOF) || (c == CHAR_SEMICOLON));
 }
+
 /*
     Holds information about a dodo command.
-    For inline commands:
-    + start = first char
-    + end = last char + 1
+    # After Parsing
+    ## Inline Commands
+    + child_start = position of first character (0-indexed)
+    + child_end = position of last character + 1
     + name = name id
-    + so if the text is "abcdef" and start = 1, end = 4 it contains "bcd"
-    For block commands:
-    + arg = arg
-    + *(Cmd& + next) = next child, is 1 if this is the last child
-    + start = 0 if no children, 1 if has continuous children, 2 if has non-continuous children
-    + *(Cmd& + end - 1) = last child, 1 if no children
-    For text commands:
-    + arg = text
-    + other same as block command
+    + arg = argument
+    + next = unspecified
+    ## Block Commands
+    + arg = argument
+    + (&Cmd + next) = position of next child (of the parent command), is 1 if this is the last child
+    + child_start = 0 if no children, 1 if has children, 2 if guaranteed that children are continuous in memory
+    + (&Cmd +child_ end - 1) = position of last child, 1 if no children
+    + Note that it is guaranteed that (if the command has children) position of first child = (&Cmd + 1) 
+    + name = name id
+    ## Text Commands
+    + same as block command, but the argument is the text and the children are inline commands
 */
-//TODO: layout is in DFS-first structure so it is cahce optimal in dfs search, guarantee thsi to user for faster stack-based iteration
 class Cmd {
 public:
-    std::vector<char> arg;
-    size_t next;
-    size_t child_start;
-    size_t child_end;
+    std::vector<char> arg{};
+    size_t next{1};
+    size_t child_start{0};
+    size_t child_end{1};
     int name;
+
+    Cmd(int n) : name{n} {}
+    Cmd() : name{0} {}
 
     struct Iterator
     {
@@ -146,14 +153,14 @@ class Parser
 {
 
 public:
-     // Error Codes
-    enum class Error {CmdParsedWithoutColon};
-
-    Parser(std::istream& s);
+    Parser(std::istream& s, std::unordered_map<std::string, int> names, bool new_names);
     ~Parser();
-
-    int name_to_int(const std::string&& name);
+    int name_to_int(const std::string& name);
     
+    /* Starts parsing. */
+    void parse();
+    /* Reference to the root command. */
+    Cmd& get_root();
    
 private:
     // Variables for stream and buffer management.
@@ -179,18 +186,63 @@ private:
     // Variables for name management.
     std::unordered_map<std::string, int> internal_names;
     const std::unordered_map<std::string, int>& external_names;
-    bool new_names_allowed = true;
+    bool new_names_allowed;
     int next_name_id = 2048;
+    int name_to_int(const std::string&& name);
 
     // Parsing functions
     std::string parse_name();
     std::vector<char> parse_arg();
     Cmd parse_cmd_decl();
+    void skip_whitespace();
 
-    // State management
-    std::vector<Cmd> commands;
-    std::vector<Error> error_list;
+    /* Vector to store all commands. It is guaranteed that cmds[0] is the root command. */
+    std::vector<Cmd> cmds{};
+    /* Stack of commands while parsing. */
+    std::stack<size_t> cmd_stack{};
+    /* Stack of inline commands while parsing text. */
+    std::stack<size_t> inline_cmd_stack{};
 };
+
+/* 
+    Constructs a dodo parser for a stream s. The names argument supplies name-to-in bindings, it MUST map 'text' to 0 and shall only include positive numbers otherwise.
+    If new_names is true, the parser will parse all names and select new ints for them. If it is false, it will parse all
+    unknown names as -1.
+*/
+inline Parser::Parser(std::istream &s, std::unordered_map<std::string, int> names = DEFAULT_NAMES, bool new_names = true)
+    : stream{s}, external_names{names}, new_names_allowed{new_names}
+{
+    // Set next_name_id larger than largest external id
+    for(const auto& [_, id] : external_names) {
+        next_name_id = std::max(next_name_id, id+1);
+    }   
+    // Init commands with root command
+    cmds.push_back(Cmd(name_to_int("root")));
+    cmd_stack.push(0);
+}
+
+
+Parser::~Parser()
+{
+}
+
+/* Gives the integer id for a name. Will return -1 if the name does not exist. */
+inline int Parser::name_to_int(const std::string& name)
+{
+    if(external_names.contains(name)) return external_names.at(name);
+    else if(internal_names.contains(name)) return internal_names.at(name);
+    else return -1;
+}
+
+inline void Parser::parse()
+{
+
+}
+
+inline Cmd &Parser::get_root()
+{
+    return cmds[0];
+}
 
 /*
     Parses a name. Leaves cursor on the first character that does not belong to the name anymore.
@@ -216,21 +268,53 @@ inline std::string Parser::parse_name()
 /*
     Parses a command. Expects the cursor to be on the first character after the colon of the command declaration.
     Will NOT check if there was <char>:<whitespace>. Assumes that this has already been checked by the caller and
-    that there is indeed a command starting.
+    that there is indeed a command starting. Returns the Cmd object in the following state:
+    + name = the name id of the command
+    + arg = argument if the command is not text, if the command is text is empty
+    + next = 0 if the command is inline, 1 if the command is block or text
+    + child_start = if the command is inline, this is 0 if it has no body (ends immediatelly) and 1 if it has a body
+    + child_end = if the command is inline and child_start == 1, this is the character value that the command ends on
 */
 Cmd Parser::parse_cmd_decl() //TODO: implement
 {
-    Cmd out;
-    out.name = name_to_int(parse_name());
+    Cmd out{name_to_int(parse_name())};
     if(out.name == 0) { // what to do on text?
-
+        out.next = 1;
+        return out;
+    } //TODO: Do not parse arguments when the command is an inline special command!
+    if(getc() == '[') { nextc(); out.arg = parse_arg(); } //TODO: test if it covers all cases
+    //TODO: if it is an inline special command handle that!
+    //TODO: cover edge cases for : and :: and :::
+    //TODO: cover edge case where empty command is a link
+    //TODO: make setting of Cmd fields more elegant
+    switch(getc())
+    {
+        case '{':
+            out.next = 0;
+            out.child_start = 1;
+            out.child_end = static_cast<size_t>('{');
+            break;
+        case ';':
+            out.next = 0;
+            out.child_start = 0;
+            break;
+        case ':':
+            out.next = 1;
+            break;
+        default:
+            out.next = 1;
     }
-    if(getc() == '[') out.arg = parse_arg();
-    // if char is '[' parse arg
-    // if char is '{' its inline command ...
-    if(getc() == '{') {} // ...
-    // else if getc is :, ;, whitespace, ....
     return out;
+}
+
+/*
+    Moves the cursor forward until it is on a non-whitespace character or EOF.
+*/
+//TODO: test
+inline void Parser::skip_whitespace()
+{
+    int c = getc();
+    while(IS_WHITESPACE(c) && !(c == CHAR_EOF)) { c = nextc(); }
 }
 
 /* Returns the current character that was also last returned by nextc(). Does not advance the cursor. */
@@ -271,25 +355,6 @@ int Parser::nextc()
     return c;
 }
 
-Parser::Parser(std::istream &s) : stream{s}, external_names{DEFAULT_NAMES}
-{
-    // Set next_name_id larger than largest external id
-    for(const auto& [_, id] : external_names) {
-        next_name_id = std::max(next_name_id, id+1);
-    }   
-
-    int cc;
-    while((cc = nextc()) != CHAR_EOF) {
-        if(cc != getc()) std::cout << "NONO";
-        else std::cout << (char) cc << " : " << indent << " " << line_is_empty << "\n";
-    }
-    //TODO: init vector etc
-}
-
-Parser::~Parser()
-{
-}
-
 /*
     Parses a command argument. Expects to be called on the first char after '[' (the first char of the argument).
     Parses verbatim, except parses ':]' as ']' until ']' or CHAR_EOF is reached. Leaves cursor on first character after ']'.
@@ -315,22 +380,22 @@ std::vector<char> Parser::parse_arg()
 }
 
 /*
-  Translates a string name to an integer. If no new names are allowed and the name is not
-  found in any of the two maps, it will return -1.
+    Gives the interger id for a string name. If the name does not exist and new names are allowed, it will
+    create a new id. Otherwise it returns -1.
 */
 int Parser::name_to_int(const std::string&& name)
 { 
     if(external_names.contains(name)) {
         return external_names.at(name);
-    } else if(internal_names.contains(name)) {
-        return internal_names.at(name);
     } else if(new_names_allowed) {
-        internal_names.emplace(std::move(name), next_name_id);
-        return next_name_id++;
-    } else {
-        return -1;
+        if(internal_names.contains(name)) {
+            return internal_names.at(name);
+        } else {
+            internal_names.emplace(std::move(name), next_name_id);
+            return next_name_id++;
+        }
     }
-   return -1;
+    return -1;
 }
 
 }
