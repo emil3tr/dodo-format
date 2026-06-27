@@ -67,7 +67,7 @@ constexpr bool IS_WHITESPACE(int c)
     switch (c)
     {
         case CHAR_NEWLINE: return true;
-        case CHAR_EOF: return true;
+        case CHAR_SPACE: return true;
         case CHAR_TAB: return true;
         default: return false;
     }
@@ -152,7 +152,6 @@ public:
     Parser(std::istream& s);
     ~Parser();
 
-    std::string parse_arg();
     int name_to_int(const std::string&& name);
     
    
@@ -161,16 +160,21 @@ private:
     const size_t BUFFER_SIZE = (4 * 1024);
     std::istream& stream;
     std::vector<char> buffer = std::vector<char>(BUFFER_SIZE);
+    /* Points to the current character, last returned by nextc(). */
     const char* buffer_cursor = buffer.data();
+    /* Points to the position of last available char + 1. */
     const char* buffer_end = buffer.data();
 
-    // Current parsing information. The indent value refers to the current indent, i.e. the indent of the char
-    // that nextc() returned last. The indent after a newline is -1.
+    // Variables and functions to get characters from stream.
+    /* Indent of the character that was last returned by getc() or next(). */
     size_t indent = -1;
-    int current_char = CHAR_NEWLINE;
-    int last_char = CHAR_NEWLINE;
-    int next_char = CHAR_NEWLINE;
+    /* 
+        True exactly if all ints returned by getc() and nextc() after the last newline returned
+        satisfied IS_WHITESPACE().
+    */
     bool line_is_empty = true;
+    inline int getc();
+    inline int nextc();
 
     // Variables for name management.
     std::unordered_map<std::string, int> internal_names;
@@ -180,9 +184,8 @@ private:
 
     // Parsing functions
     std::string parse_name();
+    std::vector<char> parse_arg();
     Cmd parse_cmd_decl();
-
-    inline bool nextc();
 
     // State management
     std::vector<Cmd> commands;
@@ -190,78 +193,82 @@ private:
 };
 
 /*
-    Parses a name. Leaves current_char on the first character that does not belong to the name anymore.
-    Expects current_char to be on the first character before the name on call.
+    Parses a name. Leaves cursor on the first character that does not belong to the name anymore.
+    Expects cursor to be on the first character of the name on call.
 */
 inline std::string Parser::parse_name()
 {
     std::string result{};
-
-    nextc();
-    if(IS_INLINE_SPECIAL(current_char)) {
-        result.push_back(current_char);
+    int c = getc();
+    if(IS_INLINE_SPECIAL(c)) {
+        result.push_back(c);
+        nextc();
         return result;
     }
 
-    do {
-        if(!IS_ALLOWED_IN_NAME(current_char)) break;
-        result.push_back(current_char);
-    } while(nextc());
+    while(IS_ALLOWED_IN_NAME(c)) {
+        result.push_back(c);
+        c = nextc();
+    }
     return result;
 }
 
 /*
-    Should be called with the current char on the first colon of the command declaration.
+    Parses a command. Expects the cursor to be on the first character after the colon of the command declaration.
+    Will NOT check if there was <char>:<whitespace>. Assumes that this has already been checked by the caller and
+    that there is indeed a command starting.
 */
-Cmd Parser::parse_cmd_decl()
+Cmd Parser::parse_cmd_decl() //TODO: implement
 {
     Cmd out;
-    bool whitespace_before = IS_WHITESPACE(last_char);
-
-    //TODO: check if char before and whitespace after and if yes go into text mode
-    if(current_char != CHAR_COLON) {
-        error_list.push_back(Error::CmdParsedWithoutColon);
-        return out;
-    }
-
     out.name = name_to_int(parse_name());
+    if(out.name == 0) { // what to do on text?
 
+    }
+    if(getc() == '[') out.arg = parse_arg();
+    // if char is '[' parse arg
+    // if char is '{' its inline command ...
+    if(getc() == '{') {} // ...
+    // else if getc is :, ;, whitespace, ....
     return out;
 }
 
-/*
-  Retrieves the next char from the stream. Sets current_char, last_char, indent, next_char and is_empty_newline
-  accordingly. If the stream ended will return false and set current_char and next to EOF. On success returns true.
-*/
-bool Parser::nextc()
+/* Returns the current character that was also last returned by nextc(). Does not advance the cursor. */
+inline int Parser::getc()
 {
-    last_char = current_char;
-    current_char = next_char;
-    if(current_char == CHAR_EOF) [[unlikely]] {
-        return false;
+    if(buffer_cursor >= buffer_end) [[unlikely]] {
+        return CHAR_EOF;
     }
-    if(buffer_cursor == buffer_end) [[unlikely]] {
+    return *buffer_cursor;
+}
+
+/*
+    Retrieves the next character from the stream and advances the cursor by one. Also sets indent and
+    line_is_empty accordingly. Will return CHAR_EOF if the stream ended.
+*/
+int Parser::nextc()
+{
+    buffer_cursor++;
+    if(buffer_cursor >= buffer_end) [[unlikely]] {
         stream.read(buffer.data(), BUFFER_SIZE);
         std::streamsize read_count = stream.gcount();
         buffer_cursor = buffer.data();
         buffer_end = buffer_cursor + read_count;
         if(read_count == 0) {
-            next_char = CHAR_EOF;
-        } else {
-            next_char = *buffer_cursor++;
-        }
-    } else {
-        next_char = *buffer_cursor++;
+            return CHAR_EOF;
+        } 
     }
 
-    if(current_char == CHAR_NEWLINE) {
+    int c = *buffer_cursor;
+    
+    if(c == CHAR_NEWLINE) {
         indent = -1;
         line_is_empty = true;
     } else {
         indent++;
-        line_is_empty = (line_is_empty && !IS_WHITESPACE(current_char));
+        line_is_empty = (line_is_empty && IS_WHITESPACE(c));
     }
-    return true;
+    return c;
 }
 
 Parser::Parser(std::istream &s) : stream{s}, external_names{DEFAULT_NAMES}
@@ -271,6 +278,11 @@ Parser::Parser(std::istream &s) : stream{s}, external_names{DEFAULT_NAMES}
         next_name_id = std::max(next_name_id, id+1);
     }   
 
+    int cc;
+    while((cc = nextc()) != CHAR_EOF) {
+        if(cc != getc()) std::cout << "NONO";
+        else std::cout << (char) cc << " : " << indent << " " << line_is_empty << "\n";
+    }
     //TODO: init vector etc
 }
 
@@ -278,19 +290,27 @@ Parser::~Parser()
 {
 }
 
-std::string Parser::parse_arg()
+/*
+    Parses a command argument. Expects to be called on the first char after '[' (the first char of the argument).
+    Parses verbatim, except parses ':]' as ']' until ']' or CHAR_EOF is reached. Leaves cursor on first character after ']'.
+*/
+//TODO: test 
+std::vector<char> Parser::parse_arg()
 {
-    std::string out{};
-    int c = stream.get();
-    while(!(c == EOF || c == ']')) {
+    std::vector<char> out{};
+    int c = getc(); 
+
+    while(c != CHAR_EOF && c != ']') {
         if(c == CHAR_COLON) {
-            if((c = stream.get()) == ']') out.push_back(']');
-            else {out.push_back(CHAR_COLON); out.push_back(c);}
+            c = nextc();
+            if(c == ']') out.push_back(']');
+            else out.push_back(CHAR_COLON);
         } else {
             out.push_back(c);
+            c = nextc();
         }
-        c = stream.get();
     }
+    nextc();
     return out;
 }
 
@@ -299,7 +319,7 @@ std::string Parser::parse_arg()
   found in any of the two maps, it will return -1.
 */
 int Parser::name_to_int(const std::string&& name)
-{ /*
+{ 
     if(external_names.contains(name)) {
         return external_names.at(name);
     } else if(internal_names.contains(name)) {
@@ -309,7 +329,7 @@ int Parser::name_to_int(const std::string&& name)
         return next_name_id++;
     } else {
         return -1;
-    }*/
+    }
    return -1;
 }
 
