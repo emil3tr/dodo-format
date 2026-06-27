@@ -73,11 +73,6 @@ constexpr bool IS_WHITESPACE(int c)
     }
 }
 
-constexpr bool IS_ALLOWED_IN_NAME(int c) 
-{
-    return !(IS_BRACKET(c) || IS_WHITESPACE(c) || (c == CHAR_COLON) || (c == CHAR_EOF) || (c == CHAR_SEMICOLON));
-}
-
 constexpr bool IS_BRACKET(int c)
 {
     switch(c)
@@ -91,6 +86,10 @@ constexpr bool IS_BRACKET(int c)
     }
 }
 
+constexpr bool IS_ALLOWED_IN_NAME(int c) 
+{
+    return !(IS_BRACKET(c) || IS_WHITESPACE(c) || (c == CHAR_COLON) || (c == CHAR_EOF) || (c == CHAR_SEMICOLON));
+}
 /*
     Holds information about a dodo command.
     For inline commands:
@@ -112,8 +111,8 @@ class Cmd {
 public:
     std::vector<char> arg;
     size_t next;
-    size_t start;
-    size_t end;
+    size_t child_start;
+    size_t child_end;
     int name;
 
     struct Iterator
@@ -138,7 +137,7 @@ public:
     };
 
     Iterator begin() { return Iterator(this + 1); }
-    Iterator end() { return Iterator(this + end); }
+    Iterator end() { return Iterator(this + child_end); }
 
     
 };
