@@ -1,7 +1,7 @@
-#include "DoDoParser.hpp"
+#include "dodo_parser_naive.hpp"
 
 int main() {
     std::ifstream aa{"test.txt"};
-   dodo::Parser parser(aa);
+   dodo::parser parser(aa);
     return 0; 
 }
