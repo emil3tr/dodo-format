@@ -3,3 +3,4 @@ with bitflags instead and index the char into that for O(1).
 + Non-UTF8 support
 + naive version might be slow
 + root command is not 'root' anymore but a generic block command
++ rewrite some messy functions

@@ -18,7 +18,7 @@ Like **html**, dodo
   + dodo is compatible with other formats (like markdown or html) and technologies (like katex).
   + if you paste something, you most likely don't break anything.
   + it is rather easy to parse. 
-+ seperates *syntax* from *semantics*. The dodo syntax specification specifies how dodo is parsed into a tree of commands.
++ separates *syntax* from *semantics*. The dodo syntax specification specifies how dodo is parsed into a tree of commands.
 The dodo semantics specification gives meaning to some standard commands. This means that
   + dodo can be used for styling, but also for configuration files.
   

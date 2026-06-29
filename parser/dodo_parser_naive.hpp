@@ -217,7 +217,6 @@ private:
     bool handle_cmd_decl_edgecases();
     void end_scope();
     void parse_code();
-
     /* Vector to store all commands. It is guaranteed that cmds[0] is the root command. */
     std::vector<cmd> cmds{};
     /* Stack of commands while parsing. */
@@ -245,12 +244,11 @@ inline parser::parser(std::istream &s, std::unordered_map<std::string, int> name
     // Init buffer
     buffer[0] = CHAR_NEWLINE;
 
-    // Testing
-    int cc = 0;
-    while((cc = nextc()) != CHAR_EOF) {
-        if(cc != getc()) std::cout << "FALSE";
-        std::cout << (char) prevc() << " : " << (char) cc << " : " << indent << " : " << line_is_empty << "\n";
-    }
+    // Call nextc() to set current char on first char
+    nextc();
+
+    //TODO: testing 
+    parse_code(); 
 }
 
 
@@ -401,20 +399,44 @@ inline void parser::end_scope()
 
 /*
     Parses code. Expects to be called on the first char after ':::'. Will leave on the first char
-    after the code command ends.
+    after the code command ends. After ':::' and any argument, the first whitespace (if there) is 
+    ignored and the rest is parsed verbatim until ':::' ending the command.
 */
 inline void parser::parse_code()
 {
-    //TODO: implement
     size_t activation_colons = 3;
     size_t colon_count = 0;
-    std::vector<char> text{};
-    std::vector<char> arg;
-    while(nextc() == CHAR_COLON)
-        activation_colons++;
-    arg = parse_arg();
+    std::vector<char> text{}; 
+    std::vector<char> arg{};
+    int c;
+    while(getc() == CHAR_COLON)
+        { activation_colons++; nextc(); }
+    if(getc() == CHAR_BRACK_SQ_OPEN)
+        arg = parse_arg();
+    if(IS_WHITESPACE(getc()))
+        nextc();
 
-    //TODO: push code and text command
+    c = getc();
+    do {
+        if(c != CHAR_COLON) {
+            if(c == CHAR_EOF)
+                break;
+            text.push_back(c);
+        } else {
+            colon_count = 1;
+            while(colon_count < activation_colons && nextc() == CHAR_COLON)
+                colon_count++;
+            if(colon_count == activation_colons)
+                break;
+            else {
+                for(int i = 0; i < colon_count; i++)
+                    text.push_back(CHAR_COLON);
+                text.push_back(getc());
+            }
+        }
+
+    } while((c = nextc()) != CHAR_EOF);
+    if(text.size() > 0 && text.back() == CHAR_NEWLINE) text.pop_back();
 }
 
 /* Returns the current character that was also last returned by nextc(). Does not advance the cursor. */
@@ -472,12 +494,13 @@ std::vector<char> parser::parse_arg()
 {
     std::vector<char> out{};
     int c = getc(); 
-
+    
     while(c != CHAR_EOF && c != ']') {
         if(c == CHAR_COLON) {
-            c = nextc();
-            if(c == ']') out.push_back(']');
-            else out.push_back(CHAR_COLON);
+            while(nextc() == CHAR_COLON)
+                out.push_back(CHAR_COLON);
+            if(getc() == ']') { out.push_back(']'); nextc(); }
+            else { out.push_back(CHAR_COLON); c = getc(); }
         } else {
             out.push_back(c);
             c = nextc();
