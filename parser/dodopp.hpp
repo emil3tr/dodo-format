@@ -1,3 +1,5 @@
+#pragma once
+
 #include <istream>
 #include <iostream>
 #include <fstream>
@@ -5,9 +7,11 @@
 #include <vector>
 #include <algorithm>
 #include <stack>
-
+#include <utility>
+#include <string>
 //TODO: commands should also not start with . and , add :. and :,
 //TODO: make :; end the scope of last non-text command
+
 
 namespace dodo {
 
@@ -24,14 +28,16 @@ inline constexpr int CHAR_BRACK_SQ_OPEN = '[';
 inline constexpr int CHAR_BRACK_SQ_CLOSE = ']';
 
 inline constexpr int TEXT_ID = 0;
+inline constexpr int ROOT_ID = 1;
 // TODO: remove magic number for text_id and set it in class instead!
 //TODO: make names low and be able to return array with mapppings if not too large
 
 inline constexpr int NAMES_ID_START = 1024;
 const std::unordered_map<std::string, int> DEFAULT_NAMES {
     {"text", 0},
-    {"block", 1},
-    {"code", 2},
+    {"root", 1},
+    {"block", 2},
+    {"code", 3},
     {"i", 10},
     {"b", 11},
     {"s", 12},
@@ -111,32 +117,37 @@ bool IS_INLINE_SPECIAL(std::string& name)
 }
 
 /*
-    Holds information about a dodo command.
-    # After Parsing
-    ## Inline Commands
-    + child_start = position of first character (0-indexed)
-    + child_end = position of last character + 1
-    + name = name id
-    + arg = argument
-    + next = unspecified
-    ## Block Commands
-    + arg = argument
-    + (&cmd + next) = position of next child (of the parent command), is 1 if this is the last child
-    + child_start = 0 if no children, 1 if has children, 2 if guaranteed that children are continuous in memory
-    + (&cmd +child_ end - 1) = position of last child, 1 if no children
-    + Note that it is guaranteed that (if the command has children) position of first child = (&cmd + 1) 
-    + name = name id
-    ## Text Commands
-    + same as block command, but the argument is the text and the children are inline commands
+    During parsing holds:
+    + arg_start = start of arg in stream buffer
+    + arg_len = indent
+    + next = real
+    + child_start = real
+    + child_end = real
+    + name = real
 */
 class cmd {
 public:
-    std::vector<char> arg{};
-    size_t next{1};
-    size_t child_start{0};
-    size_t child_end{1};
+    /* Points to first char of arg. */
+    char* arg_start;
+    /* Length of argument. */
+    size_t arg_len{0};
+    /* Points to next child of parent command. If this is the last child, is a nullptr. */
+    cmd* next{nullptr};
+    /*
+        Block commands: 1 if has children, 0 else
+        Inline commands: adress of first char of text + child_start = first char in command
+    */
+    std::ptrdiff_t child_start{0};
+    /*
+        Block command: this address + child_end = address of last child + 1
+        Inline command: child_end + address of first char of text -1 = last char in command
+    */
+    std::ptrdiff_t child_end{0};
+    /* Name ID */
     int name;
 
+    cmd(int n, char* arg, size_t indent) : name{n}, arg_start{arg}, arg_len{indent} {}
+    cmd(int n, char* arg) : name{n}, arg_start{arg} {}
     cmd(int n) : name{n} {}
     cmd() : name{0} {}
 
@@ -152,7 +163,7 @@ public:
 
         reference operator*() const { return *cmd_ptr; }
         pointer operator->() { return cmd_ptr; }
-        Iterator& operator++() { cmd_ptr += (cmd_ptr->next); return *this; }
+        Iterator& operator++() { cmd_ptr = (cmd_ptr->next == nullptr) ? cmd_ptr + 1 : cmd_ptr->next; return *this; }
         Iterator& operator++(int) { Iterator tmp = *this; ++(*this); return tmp; }
         friend bool operator==(const Iterator& a, const Iterator& b) { return a.cmd_ptr == b.cmd_ptr; }
         friend bool operator!=(const Iterator& a, const Iterator& b) { return a.cmd_ptr != b.cmd_ptr; }
@@ -171,58 +182,73 @@ class parser
 {
 
 public:
-    parser(std::istream& s, std::unordered_map<std::string, int> names, bool new_names);
+    parser(std::istream& stream, std::size_t estimated_stream_size, std::unordered_map<std::string, int> names, bool new_names);
     ~parser();
     int name_to_int(const std::string& name);
     
     /* Starts parsing. */
     void parse();
-    /* Reference to the root command. */
-    cmd& get_root();
    
 private:
-    // Variables for stream and buffer management.
-    const size_t BUFFER_SIZE = (4 * 1024); // Shall be >= 4
+    // Stream buffer management
     std::istream& stream;
-    std::vector<char> buffer = std::vector<char>(BUFFER_SIZE);
-    /* Points to the current character, last returned by nextc(). */
-    const char* buffer_cursor = buffer.data();
-    /* Points to the position of last available char + 1. */
-    const char* buffer_end = buffer.data();
+    std::size_t local_buffer_size;
+    std::vector<char> stream_buffer;
+    char* stream_buffer_start;
+    char* stream_buffer_end;
+    char* cursor;
+    /* Distance from current char to the last newline - 1. */
+    std::size_t indent = 0;
+    int current_char;
 
-    // Variables and functions to get characters from stream.
-    /* Indent of the character that was last returned by getc() or next(). */
-    size_t indent = -1;
-    /* 
-        True exactly if all ints returned by getc() and nextc() after the last newline returned
-        satisfied IS_WHITESPACE().
-    */
-    bool line_is_empty = true;
+    void read_stream_in_buffer();
     inline int getc();
     inline int nextc();
     inline int prevc();
+    inline int peekc();
+    inline int move_cursor(char* to);
+
+    // Output buffer
+    std::vector<char> output_buffer;
+    /* Points to next location that can be written to. */
+    char* output_cursor;
+
+    inline char* get_output_cursor();
+    inline void output_char(char c);
+    inline void output_range(char* start, char* end);
 
     // Variables for name management.
     std::unordered_map<std::string, int> internal_names;
     const std::unordered_map<std::string, int>& external_names;
     bool new_names_allowed;
     int next_name_id = 2048;
+
     int name_to_int(const std::string&& name);
 
     // Parsing functions
     std::string parse_name();
-    std::vector<char> parse_arg();
+    void fill_arg(cmd& command);
+    char* skip_arg();
     cmd parse_cmd_decl();
     void skip_whitespace();
+    inline void skip_space_tab();
     bool handle_cmd_decl_edgecases();
-    void end_scope();
     void parse_code();
+    void parse_text();
+
+
+    // State management
     /* Vector to store all commands. It is guaranteed that cmds[0] is the root command. */
     std::vector<cmd> cmds{};
-    /* Stack of commands while parsing. */
-    std::stack<size_t> cmd_stack{};
+    /* Stack of commands while parsing. Indexes into cmds. */
+    std::stack<cmd*> cmd_stack{};
     /* Stack of inline commands while parsing text. */
-    std::stack<size_t> inline_cmd_stack{};
+    std::stack<cmd*> inline_cmd_stack{};
+    /* Stores set of characters that end inline specials in current text. */
+    std::unordered_map<char, int> active_inline_enders{};
+    void end_text();
+    void push_cmd(int name, char* arg, size_t indent);
+    void end_scope();
 };
 
 /* 
@@ -230,30 +256,106 @@ private:
     If new_names is true, the parser will parse all names and select new ints for them. If it is false, it will parse all
     unknown names as -1.
 */
-inline parser::parser(std::istream &s, std::unordered_map<std::string, int> names = DEFAULT_NAMES, bool new_names = true)
-    : stream{s}, external_names{names}, new_names_allowed{new_names}
+inline parser::parser(std::istream &stream, std::size_t estimated_stream_size = (8 * 1024), std::unordered_map<std::string, int> names = DEFAULT_NAMES, bool new_names = true)
+    : stream{stream}, external_names{names}, new_names_allowed{new_names}
 {
     // Set next_name_id larger than largest external id
     for(const auto& [_, id] : external_names) {
         next_name_id = std::max(next_name_id, id+1);
     }   
+
+    // Init stream_buffer
+    stream_buffer.reserve(estimated_stream_size + 4);
+    read_stream_in_buffer();
+
+
+    // Init output_buffer
+    output_buffer.reserve(estimated_stream_size + 4);
+    output_cursor = output_buffer.data();
+
     // Init commands with root command
-    cmds.push_back(cmd(name_to_int("block")));
-    cmd_stack.push(0);
-
-    // Init buffer
-    buffer[0] = CHAR_NEWLINE;
-
-    // Call nextc() to set current char on first char
-    nextc();
+    cmds.push_back(cmd(ROOT_ID));
+    cmd_stack.push(&cmds[0]);
 
     //TODO: testing 
     parse_code(); 
 }
 
-
 parser::~parser()
 {
+}
+
+inline void parser::read_stream_in_buffer()
+{
+    std::vector<char> local_buffer(local_buffer_size);
+    stream_buffer.push_back(CHAR_NEWLINE);
+
+    while(stream.read(local_buffer.data(), local_buffer.size())) {
+        stream_buffer.insert(stream_buffer.end(), local_buffer.data(), local_buffer.data() + local_buffer.size());
+    }
+
+    if(stream.gcount() > 0) {
+        stream_buffer.insert(stream_buffer.end(), local_buffer.data(), local_buffer.data() + stream.gcount());
+    }
+    
+    stream_buffer_start = stream_buffer.data();
+    stream_buffer_end = stream_buffer.data() + stream_buffer.size();
+    cursor = stream_buffer_start;
+    nextc();
+}
+
+inline int parser::getc()
+{
+    return current_char;
+}
+
+inline int parser::nextc()
+{
+    cursor++;
+    if(cursor >= stream_buffer_end) [[unlikely]]
+    {
+        cursor = stream_buffer_end;
+        current_char = CHAR_EOF;
+    }
+
+    if(prevc() == CHAR_NEWLINE) indent = 0;
+    else indent++;
+    return current_char;
+}
+
+inline int parser::prevc()
+{
+    return *(cursor - 1);
+}
+
+inline int parser::peekc()
+{
+    if(cursor + 1 >= stream_buffer_end) [[unlikely]] {
+        return CHAR_EOF;
+    }
+    return *(cursor + 1);
+}
+
+inline int parser::move_cursor(char *to)
+{
+    cursor = to;
+    indent = 0;
+}
+
+inline char* parser::get_output_cursor()
+{
+    return output_cursor;
+}
+
+inline void parser::output_char(char c)
+{
+    *output_cursor++ = c;
+}
+
+inline void parser::output_range(char* start, char* end)
+{
+    std::copy(cursor, start, end);
+    cursor = end;
 }
 
 /* Gives the integer id for a name. Will return -1 if the name does not exist. */
@@ -263,6 +365,26 @@ inline int parser::name_to_int(const std::string& name)
     else if(internal_names.contains(name)) return internal_names.at(name);
     else return -1;
 }
+
+/*
+    Gives the interger id for a string name. If the name does not exist and new names are allowed, it will
+    create a new id. Otherwise it returns -1.
+*/
+int parser::name_to_int(const std::string&& name)
+{ 
+    if(external_names.contains(name)) {
+        return external_names.at(name);
+    } else if(new_names_allowed) {
+        if(internal_names.contains(name)) {
+            return internal_names.at(name);
+        } else {
+            internal_names.emplace(std::move(name), next_name_id);
+            return next_name_id++;
+        }
+    }
+    return -1;
+}
+
 
 inline void parser::parse()
 {
@@ -275,9 +397,43 @@ inline void parser::parse()
     // else parse command name and handle accordingly
 }
 
-inline cmd &parser::get_root()
+//TODO: Test, inefficient
+/*
+    Parses a command argument starting from the arg_start pointer and sets the appropriate values.
+*/
+void parser::fill_arg(cmd& command)
 {
-    return cmds[0];
+    move_cursor(command.arg_start);
+    int c = getc();
+    size_t len = 0;
+    command.arg_start = get_output_cursor();
+
+    while(c != CHAR_EOF) {
+        if(c == CHAR_BRACK_SQ_CLOSE) {
+            nextc(); break;
+        } else if(c == CHAR_COLON && peekc() == CHAR_BRACK_SQ_CLOSE) {
+            nextc(); 
+            output_char(CHAR_BRACK_SQ_CLOSE);
+            len++;
+        } else {
+            output_char(c);
+            len++;
+        }
+        c = nextc();
+    }
+
+    command.arg_len = len;
+}
+
+//TODO: test
+/* Parses the current argument as parse_arg would, but does not store it. */
+inline char *parser::skip_arg()
+{
+    char* out = cursor;
+    int c = nextc();
+    while(!(c == CHAR_EOF || (c == CHAR_BRACK_SQ_CLOSE && prevc() != CHAR_COLON))) c = nextc();
+    nextc();
+    return out;
 }
 
 /*
@@ -325,7 +481,7 @@ cmd parser::parse_cmd_decl()
         out.child_end = name[0];
         return out;
     }
-    if(getc() == '[') { nextc(); out.arg = parse_arg(); }
+    if(getc() == '[') { nextc(); out.arg = fill_arg(); }
     switch(getc())
     {
         case CHAR_BRACK_CU_OPEN: // Inline command with {}
@@ -352,6 +508,13 @@ inline void parser::skip_whitespace()
 {
     int c = getc();
     while(IS_WHITESPACE(c) && !(c == CHAR_EOF)) { c = nextc(); }
+}
+
+/* Skips until the current character is not space or tab. Ends on that character. */
+inline void parser::skip_space_tab()
+{
+    int c = getc();
+    while(c == CHAR_SPACE || c == CHAR_TAB) {c = nextc();}
 }
 
 /*
@@ -388,15 +551,6 @@ inline bool parser::handle_cmd_decl_edgecases()
     return false;
 }
 
-/* 
-    Ends the scope of the first non-text command on the stack. If the first non-text command
-    on the stack is the root command, it will do nothing.
-*/
-inline void parser::end_scope()
-{
-    //TODO: implement
-}
-
 /*
     Parses code. Expects to be called on the first char after ':::'. Will leave on the first char
     after the code command ends. After ':::' and any argument, the first whitespace (if there) is 
@@ -404,7 +558,7 @@ inline void parser::end_scope()
 */
 inline void parser::parse_code()
 {
-    size_t activation_colons = 3;
+    size_t activation_colons = 3; //TODO: implement
     size_t colon_count = 0;
     std::vector<char> text{}; 
     std::vector<char> arg{};
@@ -412,7 +566,7 @@ inline void parser::parse_code()
     while(getc() == CHAR_COLON)
         { activation_colons++; nextc(); }
     if(getc() == CHAR_BRACK_SQ_OPEN)
-        arg = parse_arg();
+        arg = fill_arg();
     if(IS_WHITESPACE(getc()))
         nextc();
 
@@ -439,94 +593,49 @@ inline void parser::parse_code()
     if(text.size() > 0 && text.back() == CHAR_NEWLINE) text.pop_back();
 }
 
-/* Returns the current character that was also last returned by nextc(). Does not advance the cursor. */
-inline int parser::getc()
-{
-    if(buffer_cursor >= buffer_end) [[unlikely]] {
-        return CHAR_EOF;
-    }
-    return *buffer_cursor;
-}
-
-/*
-    Retrieves the next character from the stream and advances the cursor by one. Also sets indent and
-    line_is_empty accordingly. Will return CHAR_EOF if the stream ended.
-    Maintains the follwing invariant: buffer_cursor-- always points to the previous char and buffer_cursor
-    points to the current char as long as we did not reach the end of file. (after the function was called once.)
-*/
-int parser::nextc()
-{
-    buffer_cursor++;
-    if(buffer_cursor >= buffer_end) [[unlikely]] {
-        buffer[0] = *(buffer_cursor - 1);
-        stream.read(buffer.data() + 1, BUFFER_SIZE - 1);
-        std::streamsize read_count = stream.gcount();
-        buffer_cursor = buffer.data() + 1;
-        buffer_end = buffer_cursor + read_count;
-        if(read_count == 0) {
-            return CHAR_EOF;
-        } 
-    }
-
-    int c = *buffer_cursor;
-    
-    if(c == CHAR_NEWLINE) {
-        indent = -1;
-        line_is_empty = true;
-    } else {
-        indent++;
-        line_is_empty = (line_is_empty && IS_WHITESPACE(c));
-    }
-    return c;
-}
-
-inline int parser::prevc()
-{
-    return *(buffer_cursor - 1);
-}
-
-/*
-    Parses a command argument. Expects to be called on the first char after '[' (the first char of the argument).
-    Parses verbatim, except parses ':]' as ']' until ']' or CHAR_EOF is reached. Leaves cursor on first character after ']'.
-*/
-//TODO: test 
-std::vector<char> parser::parse_arg()
-{
-    std::vector<char> out{};
-    int c = getc(); 
-    
-    while(c != CHAR_EOF && c != ']') {
-        if(c == CHAR_COLON) {
-            while(nextc() == CHAR_COLON)
-                out.push_back(CHAR_COLON);
-            if(getc() == ']') { out.push_back(']'); nextc(); }
-            else { out.push_back(CHAR_COLON); c = getc(); }
+// TODO: handle inline special commands ending
+inline void parser::parse_text()
+{ // TODO: if text ends remove last space if it is there.
+    std::vector<char>& arg = cmds[cmd_stack.top()].arg;
+    int c = getc();
+    while(c != CHAR_COLON && c != CHAR_EOF) {
+        if(IS_WHITESPACE(c)) {
+            if(c == CHAR_NEWLINE && line_is_empty) return;
+            if(arg.size() > 0 && arg.back() != CHAR_SPACE) arg.push_back(CHAR_SPACE);
         } else {
-            out.push_back(c);
-            c = nextc();
+            arg.push_back(c);
         }
+        c = nextc();
     }
-    nextc();
-    return out;
 }
 
-/*
-    Gives the interger id for a string name. If the name does not exist and new names are allowed, it will
-    create a new id. Otherwise it returns -1.
-*/
-int parser::name_to_int(const std::string&& name)
-{ 
-    if(external_names.contains(name)) {
-        return external_names.at(name);
-    } else if(new_names_allowed) {
-        if(internal_names.contains(name)) {
-            return internal_names.at(name);
-        } else {
-            internal_names.emplace(std::move(name), next_name_id);
-            return next_name_id++;
-        }
-    }
-    return -1;
+/* Gracefully ends and removes from stack a text command (if it is there). Clears inline stack ...*/
+inline void parser::end_text()
+{
+    //TODO: implement
 }
 
+//TODO: test
+/* Pushes a new command to the stack. */
+inline void parser::push_cmd(int name, char* arg, size_t indent) 
+{
+    end_text();
+    while(cmd_stack.size() > 1 && cmd_stack.top()->arg_len >= indent) { cmd_stack.pop(); }
+    cmds.emplace_back(name, arg, indent);
+
+    cmd* parent = cmd_stack.top();
+    if(parent->child_start == 1) {
+        (parent + parent->child_end - 1)->next = &cmds.back();
+    }
+    parent->child_start = 1;
+    parent->child_end = &cmds.back() - cmd_stack.top() + 1;
+    cmd_stack.push(&cmds.back());
+}
+
+/* Ends scope of any text commands and the first non-root command after it. */
+inline void parser::end_scope()
+{
+    end_text();
+    if(cmd_stack.size() > 1) cmd_stack.pop();
+}
 }
