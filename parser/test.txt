@@ -1,5 +1,9 @@
-::[::: ]
-code
-  code: :: :: :
-code
-:::::
+this should print.
+          here we skipped space tab.
+
+
+
+   now skipped whitespace.
+skip skip akjsdf kajs kfd
+aksfd kajsfd skip skip  %
+this prints.
