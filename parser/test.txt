@@ -1,1 +1,47 @@
-this is a paragraph
+This is a paragraph with an inline command: See, :inA[argA]{text in inA}
+how this    text    is      inlined.
+
+Now try nested inline commands like :inX[argx]{:inY[argy]{text inside}}.
+
+Let us do some code:
+:::[mycode.txt]
+hello :: : : :: : : hello
+:::
+
+and what about more code
+
+:::::::
+::::: :::: : : ::::: : 
+:::::::
+
+Now nested commands:
+
+:aaa:
+  :bbb:
+    :ccc:
+  :bbb:
+:yyy:
+:zzz:
+
+Let us try ending commands early:
+
+:aaa: with early ending bbb should be not nested :;
+  :bbb:
+
+:aaa: normally bbb is nested
+  :bbb:
+
+Text cannot have children, great :child?:
+
+Some edge:.:. cases: 
+
+:cmd::
+
+what about blocks?
+
+:: block
+ : child
+ : child
+ 
+
+And special inline :*here*?

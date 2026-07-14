@@ -1,0 +1,21 @@
+:p1: 
+  Hello this is some text in p1.
+
+  And this is a new paragraph.
+
+:list:
+  :item: hi
+  :item: hey
+  :item: ho
+
+:aaa: hi
+  :bbb: he
+    :ccc: ha
+  :bbb: ho
+:zzz: hu
+
+This: works: and :.:. this too!
+
+:::::[mycode]
+ :: : :::: : : :
+:::::

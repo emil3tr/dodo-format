@@ -6,15 +6,21 @@
 #include <iostream>
 #include <istream>
 #include <stack>
+#include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
-// TODO: change error handling to error flag in class and returning true / false
-// TODO: add error handling
+// TODO: BUG: edge cases with : and :: do not work (text with : needs to be added)
+// TODO: BUG: inline special short form does not work
+
 // TODO: parsing text is slow and naive
-// TODO: edge case where text starts with :?
+// TODO: edge case where text starts with :
+// TODO: code should respect first indent
+// TODO: change parsing from write to start of buffer to in-buffer modification / no modification to be faster
+// TODO: improve callback interface
+// TODO: remove strings, use string_view to buffer for names ...
+// TODO: parse_code uses bad old interface and has bug with last newline
+// TODO: change buffer interface to start_output_session ...
 
 namespace dodo
 {
@@ -237,9 +243,7 @@ public:
         return next_output_cursor - (last - start);
     }
 
-    inline std::size_t get_next_output_cursor() {
-        return next_output_cursor;
-    }
+    inline std::size_t get_next_output_cursor() { return next_output_cursor; }
 };
 
 enum class cmd_type { Block, Inline, Text, Root, Unknown, InlineEmpty };
@@ -252,7 +256,8 @@ public:
     char inline_ender{'\0'};
     cmd_type type{cmd_type::Unknown};
 
-    static cmd make_text(std::size_t indent) {
+    static cmd make_text(std::size_t indent)
+    {
         cmd out;
         out.type = cmd_type::Text;
         out.indent = indent;
@@ -274,8 +279,9 @@ public:
            callback_text ctext);
     ~parser();
 
-    void parse();
-    void set_error_callback(callback_error cerror);
+    bool parse();
+
+    std::string get_error_message() { return error_string; };
 
 private:
     /* Buffer for input and output. */
@@ -285,48 +291,23 @@ private:
     callback_cmd_start cstart;
     callback_cmd_end cend;
     callback_text ctext;
-    callback_error cerror;
-
-    /* Error handling. */
-    enum class status { Okay, ArgNotEnded, CodeNotEnded, InlineNotEnded, CmdStackError, NoAction };
-
-    inline bool failed(status s) { return s != status::Okay; }
-
-    bool error_callback_enabled = false;
-    void error(status type, std::string info);
-
-    std::string error_msg(status type)
-    {
-        switch (type) {
-        case status::ArgNotEnded:
-            return std::string("Argument did not end with ']'");
-        case status::CodeNotEnded:
-            return std::string("Code does not end");
-        case status::InlineNotEnded:
-            return std::string("Inline command does not end");
-        case status::CmdStackError:
-            return std::string("Error with command stack");
-        default:
-            return std::string("Error");
-        }
-    }
-
-    // TODO: All parse functions returning a status do not error handle, the first that does not
-    // does.
 
     /* Stack. */
     std::stack<cmd> cmd_stack;
-    status start_command(cmd command, std::string_view arg);
-    status end_command();
-    status end_text();
+    void start_command(cmd command, std::string_view arg);
+    void end_command();
+    void end_text();
+
+    /* Error handling*/
+    std::string error_string{"ERROR: "};
 
     /* Parsing. */
-    status parse_name(cmd& command);
-    status parse_arg(std::string_view& arg);
-    status parse_cmd_decl(cmd& command, std::string_view& arg);
-    status handle_cmd_decl_edgecases();
-    status parse_code(std::string_view& text, std::string_view& arg);
-    status parse_text(std::string_view& text);
+    cmd parse_name();
+    std::string_view parse_arg();
+    cmd parse_cmd_decl(std::string_view& arg);
+    bool handle_cmd_decl_edgecases();
+    void parse_code(std::string_view& text, std::string_view& arg);
+    void parse_text(std::string_view& text);
 
     /* True iff there should be a space before the next word in text parsing. */
     bool space_before = false;
@@ -341,151 +322,131 @@ parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end
 {
 }
 
-inline void parser::set_error_callback(callback_error cerror)
-{
-    this->cerror = cerror;
-    error_callback_enabled = true;
-}
-
-inline void parser::error(parser::status type, std::string info)
-{
-    if (!error_callback_enabled) {
-        return;
-    }
-    std::string out;
-    out.reserve(256);
-    out.append("ERROR: ")
-        .append(error_msg(type))
-        .append("\n | Line / Pos: ")
-        .append(std::to_string(buffer.line()))
-        .append(" / ")
-        .append(std::to_string(buffer.line()))
-        .append("\n | Info: ")
-        .append(info);
-    cerror(out);
-}
-
 parser::~parser() {}
 
 /**/ // TODO: implement
-inline void parser::parse()
+inline bool parser::parse()
 {
-    int c;
-    std::string_view text;
-    cmd command;
+    try {
+        int c;
+        std::string_view text;
+        cmd command;
 
-    cmd_stack.push(cmd{std::string("root"), 0, '\0', cmd_type::Root});
-    while(true) {
+        while (true) {
+            buffer.skip_whitespace();
+            c = buffer.get();
+            if (c == CHAR_COLON) {
+                if (!handle_cmd_decl_edgecases()) {
+                    buffer.next();
+                    command = parse_cmd_decl(text);
+                    if (command.type == cmd_type::Block) {
+                        end_text();
+                    }
+                    start_command(command, text);
+                }
 
-    buffer.skip_whitespace();
-    c = buffer.get();
-    if(c == CHAR_COLON) {
-        if(handle_cmd_decl_edgecases() == status::NoAction) {
-            buffer.next();
-            command = cmd{};
-            parse_cmd_decl(command, text);
-            if(command.type == cmd_type::Block) end_text();
-            start_command(command, text);
+            } else if (c == CHAR_EOF) {
+                while (cmd_stack.size() > 1) {
+                    end_command();
+                }
+                return true;
+            } else {
+                if (!text_before) {
+                    start_command(cmd::make_text(buffer.indent()), std::string_view{});
+                }
+                parse_text(text);
+            }
         }
-       
-    } else if(c == CHAR_EOF) {
-        while(cmd_stack.size() > 1) {
-            end_command();
-        }
-        return;
-    } else {
-        if(!text_before) {
-        start_command(cmd::make_text(buffer.indent()), std::string_view{});
-        }
-        if(failed(parse_text(text))) {
-            error(status::Okay, "text error");
-            return;
-        } 
+    } catch (const std::exception& e) {
+        error_string.append(e.what())
+            .append(" | at line / pos: ")
+            .append(std::to_string(buffer.line()))
+            .append(" / ")
+            .append(std::to_string(buffer.indent()));
+        return false;
     }
-    }
+    return true;
 }
 
 /*
     Parses an argument and sets arg to it. Expects current_char to be on first char after '['.
     Leaves current_char on next char after ']'.
 */
-parser::status parser::parse_arg(std::string_view& arg)
+std::string_view parser::parse_arg()
 {
     std::size_t start = buffer.get_cursor();
+    std::string_view out;
 
     if (buffer.find(']')) {
         start = buffer.output_range(start, buffer.get_cursor());
-        arg = buffer.view(start);
+        out = buffer.view(start);
         buffer.next();
     } else {
-        return status::ArgNotEnded;
+        throw std::runtime_error("Argument does not end.");
     }
-
-    return status::Okay;
+    return out;
 }
 
 /* Starts a command. Puts it on the stack and calls cstart / cend accordingly. */
-inline parser::status parser::start_command(cmd command, std::string_view arg)
+void parser::start_command(cmd command, std::string_view arg)
 {
-    cmd_type topt;
-    if (cmd_stack.size() < 1) {
-        return status::CmdStackError;
-    }
-    topt = cmd_stack.top().type;
-    if(command.type == cmd_type::InlineEmpty) {
+    if (command.type == cmd_type::InlineEmpty) {
         cstart(command.name, command.type, arg);
         cend();
-        return status::Okay;
+        return;
     }
-    if(command.type == cmd_type::Inline || command.type == cmd_type::Text) {
+    if (command.type == cmd_type::Inline) {
+        if (cmd_stack.size() < 1
+            || (cmd_stack.top().type != cmd_type::Inline
+                && cmd_stack.top().type != cmd_type::Text)) {
+            throw std::runtime_error("Inline command outside text pushed.");
+        }
         cmd_stack.push(command);
         cstart(command.name, command.type, arg);
-        return status::Okay;
+        return;
     }
-
-    while(topt == cmd_type::Inline || topt == cmd_type::Text) {
+    end_text();
+    while (cmd_stack.size() > 0 && cmd_stack.top().indent >= command.indent) {
         end_command();
-        topt = cmd_stack.top().type;
-    }
-    while (topt != cmd_type::Root && cmd_stack.top().indent >= command.indent) {
-        end_command();
-        topt == cmd_stack.top().type;
     }
     cmd_stack.push(command);
     cstart(command.name, command.type, arg);
-    return status::Okay;
+    return;
 }
 
-/* Ends the top command on the stack and calls cend. Errors when the only command on stack is root. */
-inline parser::status parser::end_command()
+/* Ends current command on stack. Will only end exactly one command. */
+inline void parser::end_command()
 {
-    if (cmd_stack.size() < 2) {
-        return status::CmdStackError;
+    if (cmd_stack.size() < 1) {
+        throw std::logic_error("end_command called on empty stack");
     }
     cend();
     cmd_stack.pop();
-    return status::Okay;
+    return;
 }
 
-inline parser::status parser::end_text() { 
+/* Ends a current text command. Also clears all variables for text parsing. Does nothing if there is
+ * no text command active. */
+void parser::end_text()
+{
     space_before = text_before = false;
-    if(cmd_stack.size() < 1) return status::CmdStackError;
-    while(cmd_stack.top().type == cmd_type::Inline) {
+    while (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
         end_command();
     }
-    if(cmd_stack.top().type != cmd_type::Text) return status::Okay;
-    end_command();
-    return status::Okay;
+    if (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Text) {
+        end_command();
+    }
+    return;
 }
-
 
 /*
     Parses a name and fills the command. If name is inline special, fills all fields, otherwise
    fills name and indent field. Expects current_char to be on first char of name. Leaves
    current_char on first char after name.
 */
-parser::status parser::parse_name(cmd& command)
+cmd parser::parse_name()
 {
+    cmd command;
     std::string result{};
     int c = buffer.get();
     command.indent = buffer.indent() - 1;
@@ -501,7 +462,7 @@ parser::status parser::parse_name(cmd& command)
         c = buffer.next();
     }
 
-    return status::Okay;
+    return command;
 }
 
 /*
@@ -510,77 +471,74 @@ parser::status parser::parse_name(cmd& command)
    current_char on the first char after the declaration ends. Also assumes that the command is a
    normal one and not an edge case.
 */
-parser::status parser::parse_cmd_decl(cmd& command, std::string_view& arg)
+cmd parser::parse_cmd_decl(std::string_view& arg)
 {
-    status s;
-
-    parse_name(command);
-    if (command.type == cmd_type::Inline) {
-        return status::Okay; // Command is inline special and finished
+    cmd out = parse_name();
+    if (out.type == cmd_type::Inline) {
+        return out;
     }
 
     if (buffer.get() == '[') {
         buffer.next();
-        s = parse_arg(arg);
-        if (s != status::Okay) {
-            return s;
-        }
+        arg = parse_arg();
     } else {
         arg = std::string_view{};
     }
     switch (buffer.get()) {
     case '{':
-        command.inline_ender = '}';
-        command.type = cmd_type::Inline;
+        out.inline_ender = '}';
+        out.type = cmd_type::Inline;
         break;
     case ';':
-        command.type = cmd_type::InlineEmpty;
+        out.type = cmd_type::InlineEmpty;
         break;
     default:
-        command.type = cmd_type::Block;
+        out.type = cmd_type::Block;
         break;
     }
     buffer.next();
-
-    return status::Okay;
+    return out;
 }
 
 /*
-    Expects to be called on a colon.
+    Expects to be called on a colon. Returns true if handled and false if no edge case occured.
 */
-inline parser::status parser::handle_cmd_decl_edgecases()
+bool parser::handle_cmd_decl_edgecases()
 {
-    switch(buffer.peek()) {
-        case CHAR_COLON:
-            end_text();
-            buffer.next();
-            if(buffer.next() == CHAR_COLON) {
-                std::string_view text, arg;
-                parse_code(text, arg);
-                cstart(std::string("code"), cmd_type::Block, arg);
-                cstart(std::string("text"), cmd_type::Text, std::string_view{});
-                ctext(text);
-                cend(); cend();
-            } else {
-                cmd c{std::string("block"), buffer.indent() - 2, '\0', cmd_type::Block};
-                std::string_view arg;
-                if(buffer.get() == '[') {
-                    parse_arg(arg);
-                }
-                start_command(c, arg);
-                return status::Okay;
-            } 
-        case '.':
+    switch (buffer.peek()) {
+    case CHAR_COLON:
+        end_text();
         buffer.next();
-            return status::Okay;
-        case CHAR_SEMICOLON:
-            end_text();
-            end_command();
+        if (buffer.next() == CHAR_COLON) {
+            std::string_view text, arg;
             buffer.next();
-            buffer.next();
-            return status::Okay;
-        default:
-            return status::NoAction;
+            parse_code(text, arg);
+            cstart(std::string("code"), cmd_type::Block, arg);
+            cstart(std::string("text"), cmd_type::Text, std::string_view{});
+            ctext(text);
+            cend();
+            cend();
+            return true;
+        } else {
+            cmd c{std::string("block"), buffer.indent() - 2, '\0', cmd_type::Block};
+            std::string_view arg;
+            if (buffer.get() == '[') {
+                arg = parse_arg();
+            }
+            start_command(c, arg);
+            return true;
+        }
+    case '.':
+        buffer.next();
+        return true;
+    case CHAR_SEMICOLON:
+        end_text();
+        end_command();
+        buffer.next();
+        buffer.next();
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -588,12 +546,11 @@ inline parser::status parser::handle_cmd_decl_edgecases()
     Parses code. Expects current_char on the first char after ':::' and ends on the first char after
    the code (and its ending symbol) ends. Puts the code verbatim into text.
 */
-parser::status parser::parse_code(std::string_view& text, std::string_view& arg)
+void parser::parse_code(std::string_view& text, std::string_view& arg)
 {
     size_t activation_colons = 3;
     size_t colon_count = 0;
     int c = buffer.get();
-    status s;
     std::size_t start;
 
     while (c == CHAR_COLON) {
@@ -602,10 +559,8 @@ parser::status parser::parse_code(std::string_view& text, std::string_view& arg)
     }
 
     if (buffer.get() == '[') {
-        s = parse_arg(arg);
-        if (s != status::Okay) {
-            return s;
-        }
+        buffer.next();
+        arg = parse_arg();
     }
     if (IS_WHITESPACE(buffer.get())) {
         buffer.next();
@@ -618,26 +573,26 @@ parser::status parser::parse_code(std::string_view& text, std::string_view& arg)
             colon_count++;
         }
         if (colon_count == activation_colons) {
-            text = buffer.view(buffer.output_range(start, buffer.get_cursor()));
-            return status::Okay;
+            text = buffer.view(buffer.output_range(start, buffer.get_cursor() - activation_colons));
+            return;
         }
     }
-    return status::CodeNotEnded;
+    throw std::runtime_error("Code does not end.");
 }
 
 /*
-    Parses text. Will end inline commands automatically and end_text() if there is an empty newline. Otherwise
-    returns when another command is starting. Will return on a newline if it ended there because of an empty newline
-    and return on a colon or CHAR_EOF otherwise.
+    Parses text. Will end inline commands automatically and end_text() if there is an empty newline.
+   Otherwise returns when another command is starting. Will return on a newline if it ended there
+   because of an empty newline and return on a colon or CHAR_EOF otherwise.
 */
-parser::status parser::parse_text(std::string_view& text)
+void parser::parse_text(std::string_view& text)
 {
     int c = buffer.get();
     int inline_end = CHAR_EOF;
     std::size_t start = buffer.get_next_output_cursor();
     bool toend = false;
 
-    if(cmd_stack.top().type == cmd_type::Inline) {
+    if (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
         inline_end = cmd_stack.top().inline_ender;
     }
 
@@ -654,27 +609,27 @@ parser::status parser::parse_text(std::string_view& text)
     while (c != CHAR_EOF) {
         if (c == inline_end) {
             end_command();
-            if(cmd_stack.top().type == cmd_type::Inline) {
+            if (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
                 inline_end = cmd_stack.top().inline_ender;
             } else {
                 inline_end = CHAR_EOF;
             }
         } else if (c == CHAR_COLON) {
-            if(IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
+            if (IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
                 buffer.output_char(c);
-            } else if(buffer.peek() == '.') {
+            } else if (buffer.peek() == '.') {
                 buffer.output_char(c);
                 buffer.next();
             } else {
                 break;
             }
         } else if (IS_WHITESPACE(c)) {
-                space_before = true;
-            if(c == '\n') {
+            space_before = true;
+            if (c == '\n') {
                 c = buffer.next();
                 buffer.skip_space_tab();
                 c = buffer.get();
-                if(c == '\n') {
+                if (c == '\n') {
                     toend = true;
                     break;
                 }
@@ -694,9 +649,10 @@ parser::status parser::parse_text(std::string_view& text)
     }
     text = buffer.view(start);
     ctext(text);
-    if(toend) end_text();
-
-    return status::Okay;
+    if (toend) {
+        end_text();
+    }
+    return;
 }
 
 } // namespace dodo
