@@ -26,3 +26,5 @@ The dodo semantics specification gives meaning to some standard commands. This m
 
 I am currently working on finishing the dodo specifications and writing a sample
 parser implementation. Later, there should be a program to convert dodo to pdf and html available and a wysiwyg online editor.
+
+THE PARSER IS WORK IN PROGRESS, CONTAINS BUGS AND SHOULD NOT BE USED OUTSIDE OF DEVELOPMENT.
