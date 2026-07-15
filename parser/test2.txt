@@ -1,21 +1,13 @@
-:p1: 
-  Hello this is some text in p1.
+This is a paragraph of text. Now with :b{inline} command and :a{:b{nested}} one.
 
-  And this is a new paragraph.
+A new paragraph.
 
-:list:
-  :item: hi
-  :item: hey
-  :item: ho
+:ul:
+  :item: Hello
+  :item: Second item
 
-:aaa: hi
-  :bbb: he
-    :ccc: ha
-  :bbb: ho
-:zzz: hu
-
-This: works: and :.:. this too!
-
-:::::[mycode]
- :: : :::: : : :
-:::::
+:aaa:
+  :bbb:
+    :ccc:
+  :ddd:
+:eee:

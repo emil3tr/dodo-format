@@ -12,11 +12,12 @@
 
 // TODO: BUG: edge cases with : and :: do not work (text with : needs to be added)
 // TODO: BUG: inline special short form does not work
+// TODO: BUG: inline command start / end does not work
 
 // TODO: parsing text is slow and naive
-// TODO: edge case where text starts with :
 // TODO: code should respect first indent
-// TODO: change parsing from write to start of buffer to in-buffer modification / no modification to be faster
+// TODO: change parsing from write to start of buffer to in-buffer modification / no modification to
+// be faster
 // TODO: improve callback interface
 // TODO: remove strings, use string_view to buffer for names ...
 // TODO: parse_code uses bad old interface and has bug with last newline
@@ -324,7 +325,6 @@ parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end
 
 parser::~parser() {}
 
-/**/ // TODO: implement
 inline bool parser::parse()
 {
     try {
