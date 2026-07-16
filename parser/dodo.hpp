@@ -10,17 +10,13 @@
 #include <string>
 #include <utility>
 
-// TODO: remake command start end / interface
+// TODO: MISSING: code should respect indent and last newline
 
 // TODO: parsing text is slow and naive
-// TODO: code should respect first indent
 // TODO: change parsing from write to start of buffer to in-buffer modification / no modification to
 // be faster
 // TODO: improve callback interface
 // TODO: remove strings, use string_view to buffer for names ...
-// TODO: parse_code uses bad old interface and has bug with last newline
-// TODO: change buffer interface to start_output_session ...
-
 // TODO: remake inlince special characters etc.
 
 namespace dodo
@@ -36,82 +32,59 @@ inline constexpr int CHAR_EOF = std::char_traits<char>::eof();
 inline constexpr std::size_t STACK_BUFFER_SIZE = (4 * 1024);
 inline constexpr std::size_t OUTPUT_BUFFER_OFFSET = 1024;
 
-constexpr bool IS_INLINE_SPECIAL(int c)
+constexpr u_int8_t FLAG_INLINE_SPECIAL = 1;
+constexpr u_int8_t FLAG_WHITESPACE = 2;
+constexpr u_int8_t FLAG_ALLOWED_IN_NAME = 4;
+
+constexpr std::array<u_int8_t, 128> MAKE_CHARFLAG_ARRAY()
 {
-    switch (c) {
-    case '!':
-        return true;
-    case '"':
-        return true;
-    case '$':
-        return true;
-    case '&':
-        return true;
-    case '/':
-        return true;
-    case '=':
-        return true;
-    case '?':
-        return true;
-    case '*':
-        return true;
-    case '+':
-        return true;
-    case '~':
-        return true;
-    case '\'':
-        return true;
-    case '|':
-        return true;
-    case '^':
-        return true;
-    default:
-        return false;
+    std::array<u_int8_t, 128> out{};
+    for (int i = 0; i < 128; i++) {
+        out[i] = FLAG_ALLOWED_IN_NAME;
     }
+
+    out['\n'] |= FLAG_WHITESPACE;
+    out['\t'] |= FLAG_WHITESPACE;
+    out[' '] |= FLAG_WHITESPACE;
+
+    out['!'] |= FLAG_INLINE_SPECIAL;
+    out['$'] |= FLAG_INLINE_SPECIAL;
+    out['&'] |= FLAG_INLINE_SPECIAL;
+    out['/'] |= FLAG_INLINE_SPECIAL;
+    out['='] |= FLAG_INLINE_SPECIAL;
+    out['?'] |= FLAG_INLINE_SPECIAL;
+    out['*'] |= FLAG_INLINE_SPECIAL;
+    out['~'] |= FLAG_INLINE_SPECIAL;
+    out['^'] |= FLAG_INLINE_SPECIAL;
+    out['_'] |= FLAG_INLINE_SPECIAL;
+    out['-'] |= FLAG_INLINE_SPECIAL;
+
+    out['('] &= ~FLAG_ALLOWED_IN_NAME;
+    out[')'] &= ~FLAG_ALLOWED_IN_NAME;
+    out['['] &= ~FLAG_ALLOWED_IN_NAME;
+    out[']'] &= ~FLAG_ALLOWED_IN_NAME;
+    out['{'] &= ~FLAG_ALLOWED_IN_NAME;
+    out['}'] &= ~FLAG_ALLOWED_IN_NAME;
+    out['<'] &= ~FLAG_ALLOWED_IN_NAME;
+    out['>'] &= ~FLAG_ALLOWED_IN_NAME;
+    out['\t'] &= ~FLAG_ALLOWED_IN_NAME;
+    out['\n'] &= ~FLAG_ALLOWED_IN_NAME;
+    out[' '] &= ~FLAG_ALLOWED_IN_NAME;
+    out[':'] &= ~FLAG_ALLOWED_IN_NAME;
+    out[';'] &= ~FLAG_ALLOWED_IN_NAME;
+    return out;
 }
+
+constexpr std::array<u_int8_t, 128> CHARFLAG_ARRAY = MAKE_CHARFLAG_ARRAY();
+
+constexpr bool IS_INLINE_SPECIAL(int c)
+{ return (c >= 0) && (c < 128) && (CHARFLAG_ARRAY[c] & FLAG_INLINE_SPECIAL); }
 
 constexpr bool IS_WHITESPACE(int c)
-{
-    switch (c) {
-    case CHAR_NEWLINE:
-        return true;
-    case CHAR_SPACE:
-        return true;
-    case CHAR_TAB:
-        return true;
-    default:
-        return false;
-    }
-}
-
-constexpr bool IS_BRACKET(int c)
-{
-    switch (c) {
-    case ')':
-        return true;
-    case '(':
-        return true;
-    case '[':
-        return true;
-    case ']':
-        return true;
-    case '{':
-        return true;
-    case '}':
-        return true;
-    default:
-        return false;
-    }
-}
+{ return (c >= 0) && (c < 128) && (CHARFLAG_ARRAY[c] & FLAG_WHITESPACE); }
 
 constexpr bool IS_ALLOWED_IN_NAME(int c)
-{
-    return !(IS_BRACKET(c) || IS_WHITESPACE(c) || (c == CHAR_COLON) || (c == CHAR_EOF)
-             || (c == CHAR_SEMICOLON));
-}
-
-bool IS_INLINE_SPECIAL(std::string& name)
-{ return (name.length() == 1 && IS_INLINE_SPECIAL(name[0])); }
+{ return (c != CHAR_EOF) && ((c >= 128) || (c < 0) || (CHARFLAG_ARRAY[c] & FLAG_ALLOWED_IN_NAME)); }
 
 class iobuff
 {
@@ -313,6 +286,8 @@ private:
     std::string_view parse_code(std::size_t colons_to_end);
     void parse_on_text();
     void parse_on_colon();
+
+    bool active_text_ended_on_whitespace = false;
 };
 
 parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
@@ -328,15 +303,15 @@ inline bool parser::parse()
     try {
         while (true) {
             buffer.skip_whitespace();
-            switch(buffer.get()) {
-                case CHAR_COLON:
-                    parse_on_colon();
-                    break;
-                case CHAR_EOF:
-                    end_all_commands();
-                    return true; 
-                default:
-                    parse_on_text();
+            switch (buffer.get()) {
+            case CHAR_COLON:
+                parse_on_colon();
+                break;
+            case CHAR_EOF:
+                end_all_commands();
+                return true;
+            default:
+                parse_on_text();
             }
         }
     } catch (const std::exception& e) {
@@ -369,22 +344,24 @@ std::string_view parser::parse_arg()
     return out;
 }
 
-/* Starts a command. Puts it on the stack and calls cstart / cend accordingly. */
+/*
+    Starts a command. Puts it on the stack and calls cstart / cend accordingly.
+    If an inline or inline empty command is started, also starts a text command before it with the
+   same indent.
+*/
 void parser::start_command(cmd command)
 {
-    if (command.type == cmd_type::InlineEmpty) {
-        cstart(command.name, command.type, command.arg);
-        cend();
-        return;
-    }
-    if (command.type == cmd_type::Inline) {
-        if (cmd_stack.size() < 1
+    if (command.type == cmd_type::Inline || command.type == cmd_type::InlineEmpty) {
+        if (cmd_stack.empty()
             || (cmd_stack.top().type != cmd_type::Inline
                 && cmd_stack.top().type != cmd_type::Text)) {
-            throw std::runtime_error("Inline command outside text pushed.");
+            start_command(cmd::make_text(command.indent));
         }
         cmd_stack.push(command);
         cstart(command.name, command.type, command.arg);
+        if (command.type == cmd_type::InlineEmpty) {
+            end_command();
+        }
         return;
     }
     end_text();
@@ -411,6 +388,7 @@ inline void parser::end_command()
  * no text command active. */
 void parser::end_text()
 {
+    active_text_ended_on_whitespace = false;
     while (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
         end_command();
     }
@@ -420,8 +398,9 @@ void parser::end_text()
     return;
 }
 
-inline void dodo::parser::end_all_commands() {
-    while(!cmd_stack.empty()) {
+inline void dodo::parser::end_all_commands()
+{
+    while (!cmd_stack.empty()) {
         end_command();
     }
 }
@@ -564,10 +543,9 @@ std::string_view parser::parse_code(std::size_t colons_to_end)
     + <char>:<whitespace>
     + :.
     + :,<char>
-    Assumes that the current character is non-whitespace and if a new text command starts here that the current
-    character is the indent of that text command.
+    Assumes that the current character is non-whitespace and if a new text command starts here that
+   the current character is the indent of that text command.
 */
-
 void parser::parse_on_text()
 {
     int c = buffer.get();
@@ -576,10 +554,16 @@ void parser::parse_on_text()
     bool text_ends = false, inline_ends = false;
     std::string_view text;
 
+    if (active_text_ended_on_whitespace || IS_WHITESPACE(buffer.prev())) {
+        buffer.output_char(CHAR_SPACE);
+    }
+    active_text_ended_on_whitespace = false;
+
     // start text command if not inside text currently
-    if(cmd_stack.empty() || !(cmd_stack.top().type == cmd_type::Text || cmd_stack.top().type == cmd_type::Inline)) {
+    if (cmd_stack.empty()
+        || !(cmd_stack.top().type == cmd_type::Text || cmd_stack.top().type == cmd_type::Inline)) {
         start_command(cmd::make_text(buffer.indent()));
-    } else if(cmd_stack.top().type == cmd_type::Inline) {
+    } else if (cmd_stack.top().type == cmd_type::Inline) {
         inline_end = cmd_stack.top().end_symbol;
     }
 
@@ -597,10 +581,10 @@ void parser::parse_on_text()
             } else if (buffer.peek() == '}' && inline_end == '}') {
                 buffer.output_char('}');
                 buffer.next();
-            } else if(buffer.peek() == ',') {
+            } else if (buffer.peek() == ',') {
                 buffer.next();
                 buffer.next();
-                if(!IS_WHITESPACE(buffer.get()) && buffer.get() != CHAR_EOF) {
+                if (!IS_WHITESPACE(buffer.get()) && buffer.get() != CHAR_EOF) {
                     buffer.output_char(buffer.get());
                 }
             } else {
@@ -628,16 +612,17 @@ void parser::parse_on_text()
     }
 
     text = buffer.view(start);
-    if(text.ends_with(' ')) {
+    if (text.ends_with(' ')) {
         text.remove_suffix(1);
+        active_text_ended_on_whitespace = true;
     }
-    if(!text.empty()) {
-    ctext(text);
+    if (!text.empty()) {
+        ctext(text);
     }
-    if(inline_ends) {
+    if (inline_ends) {
         end_command();
         buffer.next();
-    } else if(text_ends) {
+    } else if (text_ends) {
         end_text();
     }
     return;
