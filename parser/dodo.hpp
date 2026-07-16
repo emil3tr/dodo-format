@@ -10,9 +10,10 @@
 #include <string>
 #include <utility>
 
-// TODO: BUG: edge cases with : and :: do not work (text with : needs to be added)
-// TODO: BUG: inline special short form does not work
-// TODO: BUG: inline command start / end does not work
+// TODO: remake command start end / interface
+// TODO: remove edge case handler and put as much as possible in parse_name
+
+// TODO: MISSING: handle edge case with :[] for text and inline
 
 // TODO: parsing text is slow and naive
 // TODO: code should respect first indent
@@ -247,15 +248,20 @@ public:
     inline std::size_t get_next_output_cursor() { return next_output_cursor; }
 };
 
-enum class cmd_type { Block, Inline, Text, Root, Unknown, InlineEmpty };
+enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty };
 
+/*
+    Holds information about a command. For an inline command, end_symbol is the symbol it ends on.
+    For a code command, end_symbol is the number of colons the command was started with.
+*/
 class cmd
 {
 public:
-    std::string name{};
+    std::string name;
     std::size_t indent{0};
-    char inline_ender{'\0'};
+    char end_symbol{'\0'};
     cmd_type type{cmd_type::Unknown};
+    std::string_view arg;
 
     static cmd make_text(std::size_t indent)
     {
@@ -295,7 +301,7 @@ private:
 
     /* Stack. */
     std::stack<cmd> cmd_stack;
-    void start_command(cmd command, std::string_view arg);
+    void start_command(cmd command);
     void end_command();
     void end_text();
 
@@ -338,11 +344,13 @@ inline bool parser::parse()
             if (c == CHAR_COLON) {
                 if (!handle_cmd_decl_edgecases()) {
                     buffer.next();
+                    text = std::string_view();
                     command = parse_cmd_decl(text);
                     if (command.type == cmd_type::Block) {
                         end_text();
                     }
-                    start_command(command, text);
+                    command.arg = text;
+                    start_command(command);
                 }
 
             } else if (c == CHAR_EOF) {
@@ -352,7 +360,7 @@ inline bool parser::parse()
                 return true;
             } else {
                 if (!text_before) {
-                    start_command(cmd::make_text(buffer.indent()), std::string_view{});
+                    start_command(cmd::make_text(buffer.indent()));
                 }
                 parse_text(text);
             }
@@ -388,10 +396,10 @@ std::string_view parser::parse_arg()
 }
 
 /* Starts a command. Puts it on the stack and calls cstart / cend accordingly. */
-void parser::start_command(cmd command, std::string_view arg)
+void parser::start_command(cmd command)
 {
     if (command.type == cmd_type::InlineEmpty) {
-        cstart(command.name, command.type, arg);
+        cstart(command.name, command.type, command.arg);
         cend();
         return;
     }
@@ -402,7 +410,7 @@ void parser::start_command(cmd command, std::string_view arg)
             throw std::runtime_error("Inline command outside text pushed.");
         }
         cmd_stack.push(command);
-        cstart(command.name, command.type, arg);
+        cstart(command.name, command.type, command.arg);
         return;
     }
     end_text();
@@ -410,7 +418,7 @@ void parser::start_command(cmd command, std::string_view arg)
         end_command();
     }
     cmd_stack.push(command);
-    cstart(command.name, command.type, arg);
+    cstart(command.name, command.type, command.arg);
     return;
 }
 
@@ -447,14 +455,15 @@ void parser::end_text()
 cmd parser::parse_name()
 {
     cmd command;
-    std::string result{};
     int c = buffer.get();
     command.indent = buffer.indent() - 1;
 
     if (IS_INLINE_SPECIAL(c)) {
-        command.name.push_back('c');
+        command.name.push_back(c);
         command.type = cmd_type::Inline;
-        command.inline_ender = c;
+        command.end_symbol = c;
+        buffer.next();
+        return command;
     }
 
     while (IS_ALLOWED_IN_NAME(c)) {
@@ -486,7 +495,7 @@ cmd parser::parse_cmd_decl(std::string_view& arg)
     }
     switch (buffer.get()) {
     case '{':
-        out.inline_ender = '}';
+        out.end_symbol = '}';
         out.type = cmd_type::Inline;
         break;
     case ';':
@@ -521,11 +530,10 @@ bool parser::handle_cmd_decl_edgecases()
             return true;
         } else {
             cmd c{std::string("block"), buffer.indent() - 2, '\0', cmd_type::Block};
-            std::string_view arg;
             if (buffer.get() == '[') {
-                arg = parse_arg();
+                c.arg = parse_arg();
             }
-            start_command(c, arg);
+            start_command(c);
             return true;
         }
     case '.':
@@ -538,6 +546,11 @@ bool parser::handle_cmd_decl_edgecases()
         buffer.next();
         return true;
     default:
+        if(IS_WHITESPACE(buffer.peek()) && IS_WHITESPACE(buffer.prev())) {
+            start_command(cmd::make_text(buffer.indent()));
+            buffer.next();
+            return true;
+        }
         return false;
     }
 }
@@ -591,9 +604,10 @@ void parser::parse_text(std::string_view& text)
     int inline_end = CHAR_EOF;
     std::size_t start = buffer.get_next_output_cursor();
     bool toend = false;
+    bool endi = false;
 
     if (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
-        inline_end = cmd_stack.top().inline_ender;
+        inline_end = cmd_stack.top().end_symbol;
     }
 
     if (text_before) {
@@ -608,17 +622,17 @@ void parser::parse_text(std::string_view& text)
     c = buffer.get();
     while (c != CHAR_EOF) {
         if (c == inline_end) {
-            end_command();
-            if (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
-                inline_end = cmd_stack.top().inline_ender;
-            } else {
-                inline_end = CHAR_EOF;
-            }
+            endi = true;
+            buffer.next();
+            break;
         } else if (c == CHAR_COLON) {
             if (IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
                 buffer.output_char(c);
             } else if (buffer.peek() == '.') {
                 buffer.output_char(c);
+                buffer.next();
+            } else if(buffer.peek() == '}' && inline_end == '}') {
+                buffer.output_char('}');
                 buffer.next();
             } else {
                 break;
@@ -651,6 +665,8 @@ void parser::parse_text(std::string_view& text)
     ctext(text);
     if (toend) {
         end_text();
+    } else if(endi) {
+        end_command();
     }
     return;
 }

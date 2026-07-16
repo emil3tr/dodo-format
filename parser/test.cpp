@@ -65,7 +65,7 @@ void te(std::string_view text) { std::cout << text; }
 
 int main()
 {
-    std::ifstream s{"test2.txt"};
+    std::ifstream s{"test.txt"};
     dodo::parser p(s, cs, en, te);
     if (!p.parse()) {
         std::cout << p.get_error_message();
