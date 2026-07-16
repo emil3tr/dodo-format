@@ -11,9 +11,6 @@
 #include <utility>
 
 // TODO: remake command start end / interface
-// TODO: remove edge case handler and put as much as possible in parse_name
-
-// TODO: MISSING: handle edge case with :[] for text and inline
 
 // TODO: parsing text is slow and naive
 // TODO: code should respect first indent
@@ -23,6 +20,8 @@
 // TODO: remove strings, use string_view to buffer for names ...
 // TODO: parse_code uses bad old interface and has bug with last newline
 // TODO: change buffer interface to start_output_session ...
+
+// TODO: remake inlince special characters etc.
 
 namespace dodo
 {
@@ -53,8 +52,6 @@ constexpr bool IS_INLINE_SPECIAL(int c)
     case '=':
         return true;
     case '?':
-        return true;
-    case '\\':
         return true;
     case '*':
         return true;
@@ -248,7 +245,7 @@ public:
     inline std::size_t get_next_output_cursor() { return next_output_cursor; }
 };
 
-enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty };
+enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty, Code };
 
 /*
     Holds information about a command. For an inline command, end_symbol is the symbol it ends on.
@@ -304,6 +301,7 @@ private:
     void start_command(cmd command);
     void end_command();
     void end_text();
+    void end_all_commands();
 
     /* Error handling*/
     std::string error_string{"ERROR: "};
@@ -311,16 +309,10 @@ private:
     /* Parsing. */
     cmd parse_name();
     std::string_view parse_arg();
-    cmd parse_cmd_decl(std::string_view& arg);
-    bool handle_cmd_decl_edgecases();
-    void parse_code(std::string_view& text, std::string_view& arg);
-    void parse_text(std::string_view& text);
-
-    /* True iff there should be a space before the next word in text parsing. */
-    bool space_before = false;
-    /* True iff text / inline commands are currently parsed and there were already chars outputted.
-     */
-    bool text_before = false;
+    cmd parse_cmd_decl();
+    std::string_view parse_code(std::size_t colons_to_end);
+    void parse_on_text();
+    void parse_on_colon();
 };
 
 parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
@@ -334,35 +326,17 @@ parser::~parser() {}
 inline bool parser::parse()
 {
     try {
-        int c;
-        std::string_view text;
-        cmd command;
-
         while (true) {
             buffer.skip_whitespace();
-            c = buffer.get();
-            if (c == CHAR_COLON) {
-                if (!handle_cmd_decl_edgecases()) {
-                    buffer.next();
-                    text = std::string_view();
-                    command = parse_cmd_decl(text);
-                    if (command.type == cmd_type::Block) {
-                        end_text();
-                    }
-                    command.arg = text;
-                    start_command(command);
-                }
-
-            } else if (c == CHAR_EOF) {
-                while (cmd_stack.size() > 1) {
-                    end_command();
-                }
-                return true;
-            } else {
-                if (!text_before) {
-                    start_command(cmd::make_text(buffer.indent()));
-                }
-                parse_text(text);
+            switch(buffer.get()) {
+                case CHAR_COLON:
+                    parse_on_colon();
+                    break;
+                case CHAR_EOF:
+                    end_all_commands();
+                    return true; 
+                default:
+                    parse_on_text();
             }
         }
     } catch (const std::exception& e) {
@@ -437,7 +411,6 @@ inline void parser::end_command()
  * no text command active. */
 void parser::end_text()
 {
-    space_before = text_before = false;
     while (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
         end_command();
     }
@@ -447,10 +420,23 @@ void parser::end_text()
     return;
 }
 
+inline void dodo::parser::end_all_commands() {
+    while(!cmd_stack.empty()) {
+        end_command();
+    }
+}
+
 /*
-    Parses a name and fills the command. If name is inline special, fills all fields, otherwise
-   fills name and indent field. Expects current_char to be on first char of name. Leaves
-   current_char on first char after name.
+    Parses a command name. Expects current char on the first character after ':' of the command
+   declaration. Assumes that a named command starts here, including an explict text command with :,
+   block command with :: or code command with :::. Returns a filled command object with the indent
+   and name of the command. For
+    + inline special commands it sets end_symbol to the end symbol and type is inline
+    + code commands it sets end_symbol to amount of :s and type is code
+    + if the command name is empty (explicit text command or link inline command) the name is an
+   empty string
+    + if the command is a block command with :: sets type to block
+    + otherwise fills name, indent and sets type to unknown
 */
 cmd parser::parse_name()
 {
@@ -466,6 +452,23 @@ cmd parser::parse_name()
         return command;
     }
 
+    if (c == ':') {
+        c = buffer.next();
+        if (c == ':') {
+            command.name = std::string("code");
+            command.type = cmd_type::Code;
+            command.end_symbol = 3;
+            while (buffer.next() == ':') {
+                command.end_symbol++;
+            }
+            return command;
+        } else {
+            command.name = std::string("block");
+            command.type = cmd_type::Block;
+            return command;
+        }
+    }
+
     while (IS_ALLOWED_IN_NAME(c)) {
         command.name.push_back(c);
         c = buffer.next();
@@ -475,12 +478,12 @@ cmd parser::parse_name()
 }
 
 /*
-    Parses a command declaration and fills the command accordingly. Assumes that a command starts
-   here and the ':' is not part of text. Assumes current_char on the first char after ':'. Leaves
-   current_char on the first char after the declaration ends. Also assumes that the command is a
-   normal one and not an edge case.
+    Parses a command declaration. Assumes current char is on the first character after the colon of
+   the declaration. Assumes the cases of :; and :. and <char>:<whitespace> have been handled already
+   and handles all other cases. The returned command has all fields filled correctly, including the
+   indent.
 */
-cmd parser::parse_cmd_decl(std::string_view& arg)
+cmd parser::parse_cmd_decl()
 {
     cmd out = parse_name();
     if (out.type == cmd_type::Inline) {
@@ -489,10 +492,26 @@ cmd parser::parse_cmd_decl(std::string_view& arg)
 
     if (buffer.get() == '[') {
         buffer.next();
-        arg = parse_arg();
+        out.arg = parse_arg();
     } else {
-        arg = std::string_view{};
+        out.arg = std::string_view();
     }
+
+    if (out.name.empty()) {
+        if (buffer.get() == '{') {
+            out.name = std::string("link");
+            out.type = cmd_type::Inline;
+            out.end_symbol = '}';
+            buffer.next();
+        } else {
+            out.name = std::string("text");
+            out.type = cmd_type::Text;
+        }
+        return out;
+    } else if (out.type == cmd_type::Code || out.type == cmd_type::Block) {
+        return out;
+    }
+
     switch (buffer.get()) {
     case '{':
         out.end_symbol = '}';
@@ -510,71 +529,15 @@ cmd parser::parse_cmd_decl(std::string_view& arg)
 }
 
 /*
-    Expects to be called on a colon. Returns true if handled and false if no edge case occured.
+    Parses code. Expects the current_char to be on the first character after the code command
+   declaration. Leaves the current_char on first char after the code end declaration. Has no other
+   side effects other than the effects on the buffer. Returns the parsed code in a string_view.
 */
-bool parser::handle_cmd_decl_edgecases()
+std::string_view parser::parse_code(std::size_t colons_to_end)
 {
-    switch (buffer.peek()) {
-    case CHAR_COLON:
-        end_text();
-        buffer.next();
-        if (buffer.next() == CHAR_COLON) {
-            std::string_view text, arg;
-            buffer.next();
-            parse_code(text, arg);
-            cstart(std::string("code"), cmd_type::Block, arg);
-            cstart(std::string("text"), cmd_type::Text, std::string_view{});
-            ctext(text);
-            cend();
-            cend();
-            return true;
-        } else {
-            cmd c{std::string("block"), buffer.indent() - 2, '\0', cmd_type::Block};
-            if (buffer.get() == '[') {
-                c.arg = parse_arg();
-            }
-            start_command(c);
-            return true;
-        }
-    case '.':
-        buffer.next();
-        return true;
-    case CHAR_SEMICOLON:
-        end_text();
-        end_command();
-        buffer.next();
-        buffer.next();
-        return true;
-    default:
-        if(IS_WHITESPACE(buffer.peek()) && IS_WHITESPACE(buffer.prev())) {
-            start_command(cmd::make_text(buffer.indent()));
-            buffer.next();
-            return true;
-        }
-        return false;
-    }
-}
-
-/*
-    Parses code. Expects current_char on the first char after ':::' and ends on the first char after
-   the code (and its ending symbol) ends. Puts the code verbatim into text.
-*/
-void parser::parse_code(std::string_view& text, std::string_view& arg)
-{
-    size_t activation_colons = 3;
     size_t colon_count = 0;
-    int c = buffer.get();
     std::size_t start;
 
-    while (c == CHAR_COLON) {
-        activation_colons++;
-        c = buffer.next();
-    }
-
-    if (buffer.get() == '[') {
-        buffer.next();
-        arg = parse_arg();
-    }
     if (IS_WHITESPACE(buffer.get())) {
         buffer.next();
     }
@@ -582,69 +545,75 @@ void parser::parse_code(std::string_view& text, std::string_view& arg)
 
     while (buffer.find(':')) {
         colon_count = 1;
-        while (buffer.next() == ':' && colon_count < activation_colons) {
+        while (buffer.next() == ':' && colon_count < colons_to_end) {
             colon_count++;
         }
-        if (colon_count == activation_colons) {
-            text = buffer.view(buffer.output_range(start, buffer.get_cursor() - activation_colons));
-            return;
+        if (colon_count == colons_to_end) {
+            return buffer.view(buffer.output_range(start, buffer.get_cursor() - colons_to_end));
         }
     }
     throw std::runtime_error("Code does not end.");
 }
 
 /*
-    Parses text. Will end inline commands automatically and end_text() if there is an empty newline.
-   Otherwise returns when another command is starting. Will return on a newline if it ended there
-   because of an empty newline and return on a colon or CHAR_EOF otherwise.
+    Parses on text. Starts and ends text commands and handles edge-cases in text parsing. Returns
+    + if a colon (that is not parsed as text) is found returns on that colon
+    + if EOF is found returns
+    + if the text ends because of an empty newline returns there on the next line
+    Handles the following edgecases:
+    + <char>:<whitespace>
+    + :.
+    + :,<char>
+    Assumes that the current character is non-whitespace and if a new text command starts here that the current
+    character is the indent of that text command.
 */
-void parser::parse_text(std::string_view& text)
+
+void parser::parse_on_text()
 {
     int c = buffer.get();
     int inline_end = CHAR_EOF;
     std::size_t start = buffer.get_next_output_cursor();
-    bool toend = false;
-    bool endi = false;
+    bool text_ends = false, inline_ends = false;
+    std::string_view text;
 
-    if (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
+    // start text command if not inside text currently
+    if(cmd_stack.empty() || !(cmd_stack.top().type == cmd_type::Text || cmd_stack.top().type == cmd_type::Inline)) {
+        start_command(cmd::make_text(buffer.indent()));
+    } else if(cmd_stack.top().type == cmd_type::Inline) {
         inline_end = cmd_stack.top().end_symbol;
     }
 
-    if (text_before) {
-        if (IS_WHITESPACE(c)) {
-            space_before = true;
-        }
-    } else {
-        text_before = true;
-    }
-
-    buffer.skip_space_tab();
     c = buffer.get();
     while (c != CHAR_EOF) {
         if (c == inline_end) {
-            endi = true;
-            buffer.next();
+            inline_ends = true;
             break;
         } else if (c == CHAR_COLON) {
             if (IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
-                buffer.output_char(c);
+                buffer.output_char(':');
             } else if (buffer.peek() == '.') {
-                buffer.output_char(c);
+                buffer.output_char(':');
                 buffer.next();
-            } else if(buffer.peek() == '}' && inline_end == '}') {
+            } else if (buffer.peek() == '}' && inline_end == '}') {
                 buffer.output_char('}');
                 buffer.next();
+            } else if(buffer.peek() == ',') {
+                buffer.next();
+                buffer.next();
+                if(!IS_WHITESPACE(buffer.get()) && buffer.get() != CHAR_EOF) {
+                    buffer.output_char(buffer.get());
+                }
             } else {
                 break;
             }
         } else if (IS_WHITESPACE(c)) {
-            space_before = true;
+            buffer.output_char(CHAR_SPACE);
             if (c == '\n') {
                 c = buffer.next();
                 buffer.skip_space_tab();
                 c = buffer.get();
                 if (c == '\n') {
-                    toend = true;
+                    text_ends = true;
                     break;
                 }
                 continue;
@@ -652,23 +621,58 @@ void parser::parse_text(std::string_view& text)
             buffer.skip_space_tab();
             c = buffer.get();
             continue;
-        } else {
-            if (space_before) {
-                buffer.output_char(CHAR_SPACE);
-                space_before = false;
-            }
+        } else [[likely]] {
             buffer.output_char(c);
         }
         c = buffer.next();
     }
+
     text = buffer.view(start);
+    if(text.ends_with(' ')) {
+        text.remove_suffix(1);
+    }
+    if(!text.empty()) {
     ctext(text);
-    if (toend) {
-        end_text();
-    } else if(endi) {
+    }
+    if(inline_ends) {
         end_command();
+        buffer.next();
+    } else if(text_ends) {
+        end_text();
     }
     return;
+}
+
+/* Is called on a colon to parse from here. */
+inline void parser::parse_on_colon()
+{
+    cmd command;
+    switch (buffer.peek()) {
+    case CHAR_SEMICOLON:
+        end_text();
+        end_command();
+        buffer.next();
+        buffer.next();
+        return;
+    case '.':
+    case ',':
+        parse_on_text();
+        return;
+    default:
+        if (IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
+            parse_on_text();
+            return;
+        }
+        break;
+    }
+
+    buffer.next();
+    command = parse_cmd_decl();
+    start_command(command);
+    if (command.type == cmd_type::Code) {
+        ctext(parse_code(command.end_symbol));
+        end_command();
+    }
 }
 
 } // namespace dodo
