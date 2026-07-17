@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <concepts>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -9,18 +10,19 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <concepts>
 
 // TODO: MISSING: code should respect indent and last newline
 
-// TODO: parsing text is slow and naive
-// TODO: change parsing from write to start of buffer to in-buffer modification / no modification to
-// be faster
 // TODO: improve callback interface
-// TODO: remove strings, use string_view to buffer for names ...
 
 namespace dodo
 {
+
+constexpr char NAME_CODE[5] = "code";
+constexpr char NAME_TEXT[5] = "text";
+constexpr char NAME_LINK[5] = "link";
+constexpr char NAME_BLOCK[6] = "block";
+constexpr char TEXT_SINGLE_SPACE[2] = " ";
 
 inline constexpr int CHAR_SPACE = 32;
 inline constexpr int CHAR_TAB = 9;
@@ -107,7 +109,7 @@ private:
     std::size_t range_segment_start = 0;
     bool range_paused = false;
 
-    /* 
+    /*
         Each function touching temp_array must maintan the following invariant:
         temp_array[i] == false for all i in {0, 255}
     */
@@ -167,171 +169,103 @@ public:
 
     inline std::size_t indent() { return current_indent; }
 
-    inline std::size_t get_cursor() { return cursor; }
-
-    inline std::size_t get_size() { return buffer.size(); }
-
-    /* View of [start, end). */
-    inline std::string_view view(std::size_t start, std::size_t end)
-    { return std::string_view(buffer.data() + start, (end - start)); }
-
-    /* View from start to last character pushed. */
-    inline std::string_view view(std::size_t start) { return view(start, next_output_cursor); }
-
-    inline void skip_whitespace()
-    {
-        int c = get();
-        while (IS_WHITESPACE(c) && !(c == CHAR_EOF)) {
-            c = next();
-        }
-    }
-
-    inline void skip_space_tab()
-    {
-        int c = get();
-        while (c == CHAR_SPACE || c == CHAR_TAB) {
-            c = next();
-        }
-    }
-
-    /*
-        Tries to find the first occurence of c on/after the current character. If found returns true
-       and moves the current character there. If not found returns false and does nothing else.
-    */
-    inline bool find(char c)
-    {
-        std::size_t last_cursor = cursor, last_indent = current_indent;
-        int last_char = current_char;
-        while (get() != c && get() != CHAR_EOF) {
-            next();
-        }
-        if (get() == c) {
-            return true;
-        } else {
-            cursor = last_cursor;
-            current_indent = last_indent;
-            current_char = last_char;
-            return false;
-        }
-    }
-
     inline std::size_t line() { return current_line; }
 
-    inline std::size_t output_char(char c)
-    {
-        buffer[next_output_cursor] = c;
-        return next_output_cursor++;
-    }
-
-    /* Outputs range [start, last). */
-    inline std::size_t output_range(std::size_t start, std::size_t last)
-    {
-        std::copy(buffer.data() + start, buffer.data() + last, buffer.data() + next_output_cursor);
-        next_output_cursor += last - start;
-        return next_output_cursor - (last - start);
-    }
-
-    inline std::size_t get_next_output_cursor() { return next_output_cursor; }
-
     /* Starts a new range on and including the current_char. */
-    void range_start() {
+    void range_start()
+    {
         range_start_cursor = cursor;
         range_write_cursor = cursor;
         range_segment_start = cursor;
         range_paused = false;
     }
 
-    /* 
+    /*
         Overwrites the current char in the range with another char.
         Assumes the current range is not paused.
     */
-    inline void range_overwrite(char c) {
-        buffer[current_char] = c;
-    }
+    inline void range_overwrite(char c) { buffer[cursor] = c; }
 
-    /* 
+    /*
         Puts one char at the end of the range.
         Assumes that the current range is paused and will not be
         activated on the current character.
         Use range_overwrite whenever possible.
     */
-    inline void range_put(char c) {
-        buffer[range_write_cursor++] = c;
-    }
+    inline void range_put(char c) { buffer[range_write_cursor++] = c; }
 
     /*
         Pauses the current range. This means that all characters from the point where is was last
         continued or started until (but not including) the current character are in the range.
+        Retuns a view of the range.
+        If the range is already paused, does nothing except returning the view.
     */
-    inline void range_pause_before() {
-        range_paused = true;
-        if(range_segment_start == range_write_cursor) {
-            range_write_cursor = cursor;
-        } else {
-            std::copy(range_segment_start, cursor, range_write_cursor);
-            range_write_cursor = cursor;
+    std::string_view range_pause_before()
+    {
+        if (!range_paused) {
+            range_paused = true;
+            if (range_segment_start != range_write_cursor) {
+                std::copy(buffer.data() + range_segment_start, buffer.data() + cursor,
+                          buffer.data() + range_write_cursor);
+            }
+            range_write_cursor += (cursor - range_segment_start);
         }
+        return std::string_view(buffer.data() + range_start_cursor,
+                                buffer.data() + range_write_cursor);
     }
 
     /*
         Pauses the current range. This means that all characters from the point where is was last
         continued or started until (and including) the current character are in the range.
         Assumes that no new range will be started on the current character.
+        Retuns a view of the range.
+        If the range is already paused, does nothing except returning the view.
     */
-    void range_pause_here() {
-    range_paused = true;
-        if(range_segment_start == range_write_cursor) {
-            range_write_cursor = cursor + 1;
-        } else {
-            std::copy(range_segment_start, cursor + 1, range_write_cursor);
-            range_write_cursor = cursor + 1;
+    std::string_view range_pause_here()
+    {
+        if (!range_paused) {
+            range_paused = true;
+            if (range_segment_start != range_write_cursor) {
+                std::copy(buffer.data() + range_segment_start, buffer.data() + cursor + 1,
+                          buffer.data() + range_write_cursor);
+            }
+            range_write_cursor += (cursor + 1 - range_segment_start);
         }
+
+        return std::string_view(buffer.data() + range_start_cursor,
+                                buffer.data() + range_write_cursor);
     }
 
     /* Continues a range on (and including) the current character. */
-    void range_continue() {
+    void range_continue()
+    {
         range_paused = false;
         range_segment_start = cursor;
     }
 
-    /* 
-        Returns a view of the current range. If the range is paused these are all characters that are
-        included in the range before it was paused. Otherwise also includes all characters from the last
-        continue call to (but not including) the current character.
-    */
-    std::string_view range_get_before() {
-        return std::string_view(buffer.data() + range_start_cursor, range_write_cursor);
-    }
- 
-    /* 
-        Returns a view of the current range. If the range is paused these are all characters that are
-        included in the range before it was paused. Otherwise also includes all characters from the last
-        continue call to (and including) the current character.
-    */   
-   std::string_view range_get_here() {
-    return std::string_view(buffer.data() + range_start_cursor, range_write_cursor + 1);
-   }
-
-   /* Moves the current char forward until EOF is reached or it sits on one of the passed characters. Returns current char. */
-    int range_extend_until(std::convertible_to<char> auto... cs) {
-        ((temp_array[static_cast<char>(cs)] = true) , ...);
+    /* Moves the current char forward until EOF is reached or it sits on one of the passed
+     * characters. Returns current char. */
+    int find(std::convertible_to<u_int8_t> auto... cs)
+    {
+        ((temp_array[static_cast<u_int8_t>(cs)] = true), ...);
         int c = get();
-        while(c != CHAR_EOF && !temp_array[static_cast<unsigned char>(c)]) {
+        while (c != CHAR_EOF && !temp_array[static_cast<u_int8_t>(c)]) {
             c = next();
         }
-        ((temp_array[static_cast<char>(cs)] = false) , ...);
+        ((temp_array[static_cast<u_int8_t>(cs)] = false), ...);
         return c;
     }
 
-    /* Moves the current char forward until EOF is reached or predicate(current_char) != predicate_is. Returns current char. */
-    int range_extend_while(std::function<bool(int)> predicate, bool predicate_is) {
+    /* Moves the current char forward until EOF is reached or predicate(current_char) !=
+     * predicate_is. Returns current char. */
+    int skip_while(std::function<bool(int)> predicate, bool predicate_is)
+    {
         int c = get();
-        while(c != CHAR_EOF && predicate(c) == predicate_is) {
+        while (c != CHAR_EOF && (predicate(c) == predicate_is)) {
             c = next();
         }
         return c;
     }
-
 };
 
 enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty, Code };
@@ -343,7 +277,7 @@ enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty, Code };
 class cmd
 {
 public:
-    std::string name;
+    std::string_view name;
     std::size_t indent{0};
     char end_symbol{'\0'};
     cmd_type type{cmd_type::Unknown};
@@ -354,7 +288,7 @@ public:
         cmd out;
         out.type = cmd_type::Text;
         out.indent = indent;
-        out.name = std::string("text");
+        out.name = std::string_view(NAME_TEXT);
         return out;
     }
 };
@@ -362,7 +296,7 @@ public:
 class parser
 {
     using callback_cmd_start
-        = std::function<void(std::string name, cmd_type type, std::string_view args)>;
+        = std::function<void(std::string_view name, cmd_type type, std::string_view args)>;
     using callback_cmd_end = std::function<void()>;
     using callback_text = std::function<void(std::string_view text)>;
     using callback_error = std::function<void(std::string msg)>;
@@ -419,7 +353,7 @@ inline bool parser::parse()
 {
     try {
         while (true) {
-            buffer.skip_whitespace();
+            buffer.skip_while(IS_WHITESPACE, true);
             switch (buffer.get()) {
             case CHAR_COLON:
                 parse_on_colon();
@@ -448,16 +382,13 @@ inline bool parser::parse()
 */
 std::string_view parser::parse_arg()
 {
-    std::size_t start = buffer.get_cursor();
     std::string_view out;
-
-    if (buffer.find(']')) {
-        start = buffer.output_range(start, buffer.get_cursor());
-        out = buffer.view(start);
-        buffer.next();
-    } else {
+    buffer.range_start();
+    if (buffer.find(']') == CHAR_EOF) {
         throw std::runtime_error("Argument does not end.");
     }
+    out = buffer.range_pause_before();
+    buffer.next();
     return out;
 }
 
@@ -540,9 +471,10 @@ cmd parser::parse_name()
     cmd command;
     int c = buffer.get();
     command.indent = buffer.indent() - 1;
+    buffer.range_start();
 
     if (IS_INLINE_SPECIAL(c)) {
-        command.name.push_back(c);
+        command.name = buffer.range_pause_here();
         command.type = cmd_type::Inline;
         command.end_symbol = c;
         buffer.next();
@@ -552,7 +484,7 @@ cmd parser::parse_name()
     if (c == ':') {
         c = buffer.next();
         if (c == ':') {
-            command.name = std::string("code");
+            command.name = std::string_view(NAME_CODE);
             command.type = cmd_type::Code;
             command.end_symbol = 3;
             while (buffer.next() == ':') {
@@ -560,17 +492,14 @@ cmd parser::parse_name()
             }
             return command;
         } else {
-            command.name = std::string("block");
+            command.name = std::string_view(NAME_BLOCK);
             command.type = cmd_type::Block;
             return command;
         }
     }
 
-    while (IS_ALLOWED_IN_NAME(c)) {
-        command.name.push_back(c);
-        c = buffer.next();
-    }
-
+    buffer.skip_while(IS_ALLOWED_IN_NAME, true);
+    command.name = buffer.range_pause_before();
     return command;
 }
 
@@ -601,7 +530,7 @@ cmd parser::parse_cmd_decl()
             out.end_symbol = '}';
             buffer.next();
         } else {
-            out.name = std::string("text");
+            out.name = std::string_view(NAME_TEXT);
             out.type = cmd_type::Text;
         }
         return out;
@@ -633,20 +562,22 @@ cmd parser::parse_cmd_decl()
 std::string_view parser::parse_code(std::size_t colons_to_end)
 {
     size_t colon_count = 0;
-    std::size_t start;
+    std::string_view out;
 
     if (IS_WHITESPACE(buffer.get())) {
         buffer.next();
     }
-    start = buffer.get_cursor();
+    buffer.range_start();
 
-    while (buffer.find(':')) {
+    while (buffer.find(':') != CHAR_EOF) {
         colon_count = 1;
         while (buffer.next() == ':' && colon_count < colons_to_end) {
             colon_count++;
         }
         if (colon_count == colons_to_end) {
-            return buffer.view(buffer.output_range(start, buffer.get_cursor() - colons_to_end));
+            out = buffer.range_pause_before();
+            out.remove_suffix(colon_count);
+            return out;
         }
     }
     throw std::runtime_error("Code does not end.");
@@ -668,14 +599,8 @@ void parser::parse_on_text()
 {
     int c = buffer.get();
     int inline_end = CHAR_EOF;
-    std::size_t start = buffer.get_next_output_cursor();
     bool text_ends = false, inline_ends = false;
     std::string_view text;
-
-    if (active_text_ended_on_whitespace || IS_WHITESPACE(buffer.prev())) {
-        buffer.output_char(CHAR_SPACE);
-    }
-    active_text_ended_on_whitespace = false;
 
     // start text command if not inside text currently
     if (cmd_stack.empty()
@@ -685,6 +610,12 @@ void parser::parse_on_text()
         inline_end = cmd_stack.top().end_symbol;
     }
 
+    if (active_text_ended_on_whitespace || IS_WHITESPACE(buffer.prev())) {
+        ctext(std::string_view(TEXT_SINGLE_SPACE));
+    }
+    active_text_ended_on_whitespace = false;
+
+    buffer.range_start();
     c = buffer.get();
     while (c != CHAR_EOF) {
         if (c == inline_end) {
@@ -692,44 +623,49 @@ void parser::parse_on_text()
             break;
         } else if (c == CHAR_COLON) {
             if (IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
-                buffer.output_char(':');
+                // do nothing
             } else if (buffer.peek() == '.') {
-                buffer.output_char(':');
+                buffer.range_pause_here();
                 buffer.next();
+                c = buffer.next();
+                buffer.range_continue();
+                continue;
             } else if (buffer.peek() == '}' && inline_end == '}') {
-                buffer.output_char('}');
+                buffer.range_pause_before();
                 buffer.next();
+                buffer.range_continue();
             } else if (buffer.peek() == ',') {
+                buffer.range_pause_before();
                 buffer.next();
                 buffer.next();
-                if (!IS_WHITESPACE(buffer.get()) && buffer.get() != CHAR_EOF) {
-                    buffer.output_char(buffer.get());
-                }
+                buffer.range_continue();
             } else {
                 break;
             }
+            c = buffer.next();
         } else if (IS_WHITESPACE(c)) {
-            buffer.output_char(CHAR_SPACE);
+            buffer.range_overwrite(CHAR_SPACE);
+            buffer.range_pause_here();
             if (c == '\n') {
-                c = buffer.next();
-                buffer.skip_space_tab();
-                c = buffer.get();
+                buffer.next();
+                c = buffer.skip_while([](int c) { return (c == CHAR_SPACE || c == CHAR_TAB); },
+                                      true);
                 if (c == '\n') {
                     text_ends = true;
+                    buffer.range_continue();
                     break;
                 }
-                continue;
+            } else {
+                c = buffer.skip_while([](int c) { return (c == CHAR_SPACE || c == CHAR_TAB); },
+                                      true);
             }
-            buffer.skip_space_tab();
-            c = buffer.get();
-            continue;
+            buffer.range_continue();
         } else [[likely]] {
-            buffer.output_char(c);
+            c = buffer.next();
         }
-        c = buffer.next();
     }
 
-    text = buffer.view(start);
+    text = buffer.range_pause_before();
     if (text.ends_with(' ')) {
         text.remove_suffix(1);
         active_text_ended_on_whitespace = true;
