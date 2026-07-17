@@ -337,7 +337,18 @@ private:
     void parse_on_text();
     void parse_on_colon();
 
-    bool active_text_ended_on_whitespace = false;
+    /* Text Parsing. */
+    /*
+        Set to true exactly if the last call to parse_on_text ended on space and we are inside text right now
+        and ctext with only a space should be called before either
+        + a new inline command is started or
+        + the next call to parse_on_text sets a character
+    */
+    bool text_wants_space_next = false;
+    /* Is true exactly if we are in text currently and there was just ctext with only a space called. */
+    bool text_had_space_last = false;
+    /* Is true exactly if this is the first time parse_on_text is called while the current text command is active. */
+    bool text_first_call = true;
 };
 
 parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
@@ -436,7 +447,8 @@ inline void parser::end_command()
  * no text command active. */
 void parser::end_text()
 {
-    active_text_ended_on_whitespace = false;
+    text_wants_space_next = text_had_space_last = false;
+    text_first_call = true;
     while (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
         end_command();
     }
@@ -610,10 +622,11 @@ void parser::parse_on_text()
         inline_end = cmd_stack.top().end_symbol;
     }
 
-    if (active_text_ended_on_whitespace || IS_WHITESPACE(buffer.prev())) {
+    if (text_wants_space_next || (IS_WHITESPACE(buffer.prev()) && !text_had_space_last && !text_first_call)) {
         ctext(std::string_view(TEXT_SINGLE_SPACE));
     }
-    active_text_ended_on_whitespace = false;
+    text_wants_space_next = text_had_space_last = false;
+    text_first_call = false;
 
     buffer.range_start();
     c = buffer.get();
@@ -668,7 +681,7 @@ void parser::parse_on_text()
     text = buffer.range_pause_before();
     if (text.ends_with(' ')) {
         text.remove_suffix(1);
-        active_text_ended_on_whitespace = true;
+        text_wants_space_next = true;
     }
     if (!text.empty()) {
         ctext(text);
@@ -707,6 +720,10 @@ inline void parser::parse_on_colon()
 
     buffer.next();
     command = parse_cmd_decl();
+    if(text_wants_space_next && (command.type == cmd_type::Inline || command.type == cmd_type::InlineEmpty)) {
+        ctext(std::string_view(TEXT_SINGLE_SPACE));
+        text_wants_space_next = false;
+    }
     start_command(command);
     if (command.type == cmd_type::Code) {
         ctext(parse_code(command.end_symbol));

@@ -1,69 +1,26 @@
-:.
+:h1: Heading
 
-Hello.
+This is a paragraph. With some :i{italic} and :b{bold} and :u{underlined} text.
 
-This is a paragraph with an inline command: See, :inA[argA]{text in inA}
-how this    text    is      inlined.
+:h2: Lists
 
-Now try nested inline commands like :inX[argx]{:inY[argy]{text inside}}.
+Let's do some lists:
 
-Let us do some code:
-:::[mycode.txt]
-hello :: : : :: : : hello
-:::
+:ul: first 
+   : second
+   :ul:
+      : sublist first
+      : sublist second
+   : and here again
 
-and what about more code
+:ol: one : two : three : four
 
-:::::::
-::::: :::: : : ::::: : 
-:::::::
+:h2: Code and verbatim
 
-Now nested commands:
+This is code!
 
-:aaa:
-  :bbb:
-    :ccc:
-  :bbb:
-:yyy:
-:zzz:
+::::
+:: ::: : ::
+::::
 
-Let us try ending commands early:
-
-:aaa: with early ending bbb should be not nested :;
-  :bbb:
-
-:aaa: normally bbb is nested
-  :bbb:
-
-Text cannot have children, great :child?:
-
-Some edge:.:. cases: 
-
-:cmd::
-
-what about blocks?
-
-:: block
- : child
- : child
- 
-
-And special inline :*here*?
-
-More edge cases:
-
-We do not want :inline{this :} bracket} to end the command early.
-
-This colon should :,: sbe verbatim, as is this g: :,g
-
-:: Now text command with argument :[a1] first : second :[a2] third
-
-:inl{hello} :*hi*
-
-:: Testing whitespace:
- : aa :*bb* aa:*bb*aa:*bb* aa :*bb*aa
- : aa :i{bb  } aa:i{bb}aa :i{bb}aa:i{ bb} aa
-
-
- 
-Hello this is some text here here here :.:.:.:, :,::,:it
+And now some edge cases: :, :, :, :.:.:. :,::,,

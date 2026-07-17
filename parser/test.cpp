@@ -18,16 +18,22 @@ void put_indent()
     }
 }
 
-void put_cdec(std::string_view name, std::string_view& args)
+void put_cdec(std::string_view name, std::string_view& args, dodo::cmd_type type)
 {
-    std::cout << "<" << name;
-    if (args.length() > 0) {
-        std::cout << " " << args;
+    if(type == dodo::cmd_type::Inline || type == dodo::cmd_type::InlineEmpty) {
+        std::cout << "<span class=\"" << name <<"\">";
+    } else {
+        std::cout << "<div class=\"" << name << "\">";
     }
-    std::cout << ">";
 }
 
-void put_edec(std::string_view name) { std::cout << "</" << name << ">"; }
+void put_edec(std::string_view name, dodo::cmd_type type) { 
+   if(type == dodo::cmd_type::Inline || type == dodo::cmd_type::InlineEmpty) {
+        std::cout << "</span>";
+    } else {
+        std::cout << "</div>";
+    }
+}
 
 void cs(std::string_view name, dodo::cmd_type type, std::string_view args)
 {
@@ -35,13 +41,13 @@ void cs(std::string_view name, dodo::cmd_type type, std::string_view args)
     if (type == dodo::cmd_type::Block) {
         put_indent();
         indent++;
-        put_cdec(name, args);
+        put_cdec(name, args, type);
         std::cout << "\n";
     } else if (type == dodo::cmd_type::Text) {
         put_indent();
-        put_cdec(name, args);
+        put_cdec(name, args, type);
     } else {
-        put_cdec(name, args);
+        put_cdec(name, args, type);
     }
 }
 
@@ -50,13 +56,13 @@ void en()
     if (st.top().t == dodo::cmd_type::Block) {
         indent--;
         put_indent();
-        put_edec(st.top().n);
+        put_edec(st.top().n, st.top().t);
         std::cout << "\n";
     } else if (st.top().t == dodo::cmd_type::Text) {
-        put_edec(st.top().n);
+        put_edec(st.top().n, st.top().t);
         std::cout << "\n";
     } else {
-        put_edec(st.top().n);
+        put_edec(st.top().n, st.top().t);
     }
     st.pop();
 }
