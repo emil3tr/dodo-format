@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <concepts>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -9,7 +10,6 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <concepts>
 
 // TODO: MISSING: code should respect indent and last newline
 
@@ -107,7 +107,7 @@ private:
     std::size_t range_segment_start = 0;
     bool range_paused = false;
 
-    /* 
+    /*
         Each function touching temp_array must maintan the following invariant:
         temp_array[i] == false for all i in {0, 255}
     */
@@ -234,104 +234,102 @@ public:
     inline std::size_t get_next_output_cursor() { return next_output_cursor; }
 
     /* Starts a new range on and including the current_char. */
-    void range_start() {
+    void range_start()
+    {
         range_start_cursor = cursor;
         range_write_cursor = cursor;
         range_segment_start = cursor;
         range_paused = false;
     }
 
-    /* 
+    /*
         Overwrites the current char in the range with another char.
         Assumes the current range is not paused.
     */
-    inline void range_overwrite(char c) {
-        buffer[current_char] = c;
-    }
+    inline void range_overwrite(char c) { buffer[current_char] = c; }
 
-    /* 
+    /*
         Puts one char at the end of the range.
         Assumes that the current range is paused and will not be
         activated on the current character.
         Use range_overwrite whenever possible.
     */
-    inline void range_put(char c) {
-        buffer[range_write_cursor++] = c;
-    }
+    inline void range_put(char c) { buffer[range_write_cursor++] = c; }
 
     /*
         Pauses the current range. This means that all characters from the point where is was last
         continued or started until (but not including) the current character are in the range.
+        Retuns a view of the range.
+        If the range is already paused, does nothing except returning the view.
     */
-    inline void range_pause_before() {
-        range_paused = true;
-        if(range_segment_start == range_write_cursor) {
-            range_write_cursor = cursor;
-        } else {
-            std::copy(range_segment_start, cursor, range_write_cursor);
-            range_write_cursor = cursor;
+    std::string_view range_pause_before()
+    {
+        if (!range_paused) {
+            range_paused = true;
+            if (range_segment_start == range_write_cursor) {
+                range_write_cursor = cursor;
+            } else {
+                std::copy(buffer.data() + range_segment_start, buffer.data() + cursor, buffer.data() + range_write_cursor);
+                range_write_cursor = cursor;
+            }
         }
+        return std::string_view(buffer.data() + range_start_cursor,
+                                buffer.data() + range_write_cursor);
     }
 
     /*
         Pauses the current range. This means that all characters from the point where is was last
         continued or started until (and including) the current character are in the range.
         Assumes that no new range will be started on the current character.
+        Retuns a view of the range.
+        If the range is already paused, does nothing except returning the view.
     */
-    void range_pause_here() {
-    range_paused = true;
-        if(range_segment_start == range_write_cursor) {
-            range_write_cursor = cursor + 1;
-        } else {
-            std::copy(range_segment_start, cursor + 1, range_write_cursor);
-            range_write_cursor = cursor + 1;
+    std::string_view range_pause_here()
+    {
+        if (!range_paused) {
+            range_paused = true;
+            if (range_segment_start == range_write_cursor) {
+                range_write_cursor = cursor + 1;
+            } else {
+                std::copy(buffer.data() + range_segment_start, buffer.data() + cursor + 1, buffer.data() + range_write_cursor);
+                range_write_cursor = cursor + 1;
+            }
         }
+
+        return std::string_view(buffer.data() + range_start_cursor,
+                                buffer.data() + range_write_cursor);
     }
 
     /* Continues a range on (and including) the current character. */
-    void range_continue() {
+    void range_continue()
+    {
         range_paused = false;
         range_segment_start = cursor;
     }
 
-    /* 
-        Returns a view of the current range. If the range is paused these are all characters that are
-        included in the range before it was paused. Otherwise also includes all characters from the last
-        continue call to (but not including) the current character.
-    */
-    std::string_view range_get_before() {
-        return std::string_view(buffer.data() + range_start_cursor, range_write_cursor);
-    }
- 
-    /* 
-        Returns a view of the current range. If the range is paused these are all characters that are
-        included in the range before it was paused. Otherwise also includes all characters from the last
-        continue call to (and including) the current character.
-    */   
-   std::string_view range_get_here() {
-    return std::string_view(buffer.data() + range_start_cursor, range_write_cursor + 1);
-   }
-
-   /* Moves the current char forward until EOF is reached or it sits on one of the passed characters. Returns current char. */
-    int range_extend_until(std::convertible_to<char> auto... cs) {
-        ((temp_array[static_cast<char>(cs)] = true) , ...);
+    /* Moves the current char forward until EOF is reached or it sits on one of the passed
+     * characters. Returns current char. */
+    int range_extend_until(std::convertible_to<u_int8_t> auto... cs)
+    {
+        ((temp_array[static_cast<u_int8_t>(cs)] = true), ...);
         int c = get();
-        while(c != CHAR_EOF && !temp_array[static_cast<unsigned char>(c)]) {
+        while (c != CHAR_EOF && !temp_array[static_cast<u_int8_t>(c)]) {
             c = next();
         }
-        ((temp_array[static_cast<char>(cs)] = false) , ...);
+        ((temp_array[static_cast<u_int8_t>(cs)] = false), ...);
         return c;
     }
 
-    /* Moves the current char forward until EOF is reached or predicate(current_char) != predicate_is. Returns current char. */
-    int range_extend_while(std::function<bool(int)> predicate, bool predicate_is) {
+    /* Moves the current char forward until EOF is reached or predicate(current_char) !=
+     * predicate_is. Returns current char. */
+    int range_extend_while(std::function<bool(int)> predicate, bool predicate_is)
+    {
         int c = get();
-        while(c != CHAR_EOF && predicate(c) == predicate_is) {
+        while (c != CHAR_EOF && predicate(c) == predicate_is) {
             c = next();
         }
         return c;
     }
-
 };
 
 enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty, Code };
