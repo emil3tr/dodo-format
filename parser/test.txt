@@ -45,3 +45,17 @@ what about blocks?
  
 
 And special inline :*here*?
+
+More edge cases:
+
+We do not want :inline{this :} bracket} to end the command early.
+
+This colon should :,: sbe verbatim, as is this g: :,g
+
+:: Now text command with argument :[a1] first : second :[a2] third
+
+:inl{hello} :*hi*
+
+:: Testing whitespace:
+ : aa :*bb* aa:*bb*aa:*bb* aa :*bb*aa
+ : aa :i{bb} aa:i{bb}aa :i{bb}aa:i{ bb} aa
