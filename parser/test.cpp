@@ -5,7 +5,7 @@
 int indent = 0;
 
 struct ccc {
-    std::string n;
+    std::string_view n;
     dodo::cmd_type t;
 };
 
@@ -18,7 +18,7 @@ void put_indent()
     }
 }
 
-void put_cdec(std::string& name, std::string_view& args)
+void put_cdec(std::string_view name, std::string_view& args)
 {
     std::cout << "<" << name;
     if (args.length() > 0) {
@@ -27,9 +27,9 @@ void put_cdec(std::string& name, std::string_view& args)
     std::cout << ">";
 }
 
-void put_edec(std::string& name) { std::cout << "</" << name << ">"; }
+void put_edec(std::string_view name) { std::cout << "</" << name << ">"; }
 
-void cs(std::string name, dodo::cmd_type type, std::string_view args)
+void cs(std::string_view name, dodo::cmd_type type, std::string_view args)
 {
     st.push(ccc{name, type});
     if (type == dodo::cmd_type::Block) {
