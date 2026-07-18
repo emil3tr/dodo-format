@@ -24,5 +24,17 @@ The dodo semantics specification gives meaning to some standard commands. This m
   
 # Development
 
-I am currently working on finishing the dodo specifications and writing a sample
-parser implementation. Later, there should be a program to convert dodo to pdf and html available and a wysiwyg online editor.
+The parser currently works for the tested inputs. However, it still needs
+
++ more testing for correctness and edge cases.
++ a better buffer interface.
++ a lot of rewriting to improve readability and code quality.
++ once the buffer interface is clear, major rewriting of the main parsing functions to improve speed
+  and strategies to reduce copying.
++ specialized algorithms to make the common case fast.
+
+The format also still misses
+
++ a finished syntax guide.
++ a finished semantics guide.
++ examples.
