@@ -30,7 +30,6 @@ inline constexpr int CHAR_SEMICOLON = 59;
 inline constexpr int CHAR_EOF = std::char_traits<char>::eof();
 
 inline constexpr std::size_t STACK_BUFFER_SIZE = (4 * 1024);
-inline constexpr std::size_t OUTPUT_BUFFER_OFFSET = 1024;
 
 constexpr u_int8_t FLAG_INLINE_SPECIAL = 1;
 constexpr u_int8_t FLAG_WHITESPACE = 2;
@@ -90,22 +89,21 @@ constexpr bool IS_ALLOWED_IN_NAME(int c)
 class iobuff
 {
 private:
-    std::string buffer;
-    std::size_t cursor;
-    std::size_t next_output_cursor = 0;
-    std::size_t current_indent = 0;
-    std::size_t current_line = 0;
-    int current_char;
+    std::string buffer{};
+    std::size_t cursor{1};
+    std::size_t current_indent{0};
+    std::size_t current_line{0};
+    int current_char{};
     int last_char = '\n';
-    std::size_t buffer_size;
+    std::size_t buffer_size{};
 
-    /* First char of current range. */
-    std::size_t range_start_cursor = 0;
+    /* First char ofUT_BUFF current range. */
+    std::size_t range_start_cursor{0};
     /* Next char of range is written here. */
-    std::size_t range_write_cursor = 0;
+    std::size_t range_write_cursor{0};
     /* First char of current segment of the range. */
-    std::size_t range_segment_start = 0;
-    bool range_paused = false;
+    std::size_t range_segment_start{0};
+    bool range_paused{false};
 
     /*
         Each function touching temp_array must maintan the following invariant:
@@ -114,11 +112,10 @@ private:
     std::array<bool, 256> temp_array{};
 
 public:
-    iobuff(std::istream& stream, std::size_t estimated_size = (63 * 1024))
+    iobuff(std::istream& stream, std::size_t estimated_size = (32 * 1024))
     {
         char local_buffer[STACK_BUFFER_SIZE];
-        buffer.reserve(estimated_size + OUTPUT_BUFFER_OFFSET);
-        buffer.append(OUTPUT_BUFFER_OFFSET, '\0');
+        buffer.reserve(estimated_size);
         buffer.push_back(CHAR_NEWLINE);
 
         while (stream.read(local_buffer, STACK_BUFFER_SIZE)) {
@@ -130,9 +127,7 @@ public:
         }
 
         buffer_size = buffer.size();
-        cursor = OUTPUT_BUFFER_OFFSET + 1;
         current_char = (cursor >= buffer_size) ? CHAR_EOF : buffer[cursor];
-        current_indent = 0;
     }
 
     inline int get() { return current_char; }
@@ -310,7 +305,7 @@ class parser
 
 public:
     parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
-           callback_text ctext);
+           callback_text ctext, std::size_t estimated_size);
     ~parser();
 
     bool parse();
@@ -369,16 +364,18 @@ private:
  * type, std::string_view args)
  * @param cend Callback when a command ends. Of type void()
  * @param ctext Callback to output text. Of type void(std::string_view text)
+ * @param estimated_size (optional) estimated size of stream (should be larger than actual size by
+ * at least +4 since parser may add some chars)
  */
 parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
-               callback_text ctext)
-    : buffer(stream), cstart{cstart}, cend{cend}, ctext{ctext}
+               callback_text ctext, std::size_t estimated_size = (32 * 1024))
+    : buffer(stream, estimated_size), cstart(cstart), cend(cend), ctext(ctext)
 {
 }
 
 parser::~parser() {}
 
-/* 
+/*
     Parses. Returns true if parsing was successful. Returns false otherwise.
     If false was returned, the error string is in get_error_message().
 

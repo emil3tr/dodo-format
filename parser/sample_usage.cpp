@@ -59,16 +59,21 @@ void command_starts(std::string_view name, dodo::cmd_type type, std::string_view
 
 void command_ends()
 {
-    if (stack.top().type == dodo::cmd_type::Block) {
+    switch (stack.top().type) {
+    case dodo::cmd_type::Block:
         indent--;
         put_indent();
         put_edec(stack.top().name);
         std::cout << "\n";
-    } else if (stack.top().type == dodo::cmd_type::Text) {
+        break;
+    case dodo::cmd_type::Text:
+    case dodo::cmd_type::Code:
         put_edec(stack.top().name);
         std::cout << "\n";
-    } else {
+        break;
+    default:
         put_edec(stack.top().name);
+        break;
     }
     stack.pop();
 }
