@@ -11,8 +11,6 @@
 #include <string>
 #include <utility>
 
-// TODO: MISSING: code should respect indent and last newline
-
 namespace dodo
 {
 
@@ -85,6 +83,7 @@ constexpr bool IS_WHITESPACE(int c)
 constexpr bool IS_ALLOWED_IN_NAME(int c)
 { return ((c != CHAR_EOF) && (CHARFLAG_ARRAY[static_cast<u_int8_t>(c)] & FLAG_ALLOWED_IN_NAME)); }
 
+constexpr bool IS_TAB_SPACE(int c) {return c == CHAR_TAB || c == CHAR_SPACE;}
 /* All range functions assume that the current character is not CHAR_EOF. */
 class iobuff
 {
@@ -228,6 +227,8 @@ public:
         return std::string_view(buffer.data() + range_start_cursor,
                                 buffer.data() + range_write_cursor);
     }
+
+    bool range_is_paused() {return range_paused; }
 
     /* Continues a range on (and including) the current character. */
     void range_continue()
@@ -593,15 +594,17 @@ cmd parser::parse_cmd_decl()
 */
 std::string_view parser::parse_code(std::size_t colons_to_end)
 {
-    size_t colon_count = 0;
+    std::size_t colon_count = 0;
+    std::size_t indent = 0;
     std::string_view out;
 
-    if (IS_WHITESPACE(buffer.get())) {
-        buffer.next();
-    }
     buffer.range_start();
 
-    while (buffer.find(':') != CHAR_EOF) {
+    buffer.skip_while(IS_TAB_SPACE, true);
+    if (buffer.get() == CHAR_NEWLINE) {
+        buffer.next();
+    } else {
+        while(buffer.find(':', '\n') == ':') {
         colon_count = 1;
         while (buffer.next() == ':' && colon_count < colons_to_end) {
             colon_count++;
@@ -611,6 +614,55 @@ std::string_view parser::parse_code(std::size_t colons_to_end)
             out.remove_suffix(colon_count);
             return out;
         }
+        }
+        if(buffer.get() != CHAR_EOF) { // found a newline
+            buffer.range_pause_here();
+            buffer.next();
+        } else {
+            throw std::runtime_error("Code does not end.");
+        }
+    }
+
+    while(IS_TAB_SPACE(buffer.get())) {
+        indent++;
+        buffer.next();
+    }
+
+    if(!buffer.range_is_paused()) {
+        buffer.range_start();
+        buffer.range_pause_before();
+    }
+    if(buffer.range_is_paused()) {
+        buffer.range_continue();
+    } else {
+        buffer.range_start();
+    }
+
+    while (buffer.find(':', '\n') != CHAR_EOF) {
+        if(buffer.get() == ':') {
+ colon_count = 1;
+        while (buffer.next() == ':' && colon_count < colons_to_end) {
+            colon_count++;
+        }
+        if (colon_count == colons_to_end) {
+            out = buffer.range_pause_before();
+            out.remove_suffix(colon_count);
+            if(out.ends_with('\n')) {
+                out.remove_suffix(1);
+            }
+            return out;
+        }
+        } else {
+            buffer.range_pause_here();
+            buffer.next();
+            for(std::size_t i = 0; i < indent; i++) {
+                if(IS_TAB_SPACE(buffer.get())) {
+                    buffer.next();
+                }
+            }
+            buffer.range_continue();
+        }
+       
     }
     throw std::runtime_error("Code does not end.");
 }
@@ -700,7 +752,7 @@ void parser::parse_on_text()
     }
 
     text = buffer.range_pause_before();
-    if (text.ends_with(' ')) {
+    while(text.ends_with(' ')) {
         text.remove_suffix(1);
         text_wants_space_next = true;
     }
