@@ -13,14 +13,17 @@ Let's do some lists:
       : sublist second
    : and here again
 
-:ol: one : two : three : four
+:ol[arg1]: one : two :[arg2] three : four
 
 :h2: Code and verbatim
 
 This is code!
 
-::::
+::::[arg_code]
 :: ::: : ::
 ::::
 
 And now some edge cases: :, :, :, :.:.:. :,::,,
+
+Text cannot have children! :child??:
+                               ::: code as child :::

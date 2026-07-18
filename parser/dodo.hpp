@@ -13,8 +13,6 @@
 
 // TODO: MISSING: code should respect indent and last newline
 
-// TODO: improve callback interface
-
 namespace dodo
 {
 
@@ -38,10 +36,10 @@ constexpr u_int8_t FLAG_INLINE_SPECIAL = 1;
 constexpr u_int8_t FLAG_WHITESPACE = 2;
 constexpr u_int8_t FLAG_ALLOWED_IN_NAME = 4;
 
-constexpr std::array<u_int8_t, 128> MAKE_CHARFLAG_ARRAY()
+constexpr std::array<u_int8_t, 256> MAKE_CHARFLAG_ARRAY()
 {
-    std::array<u_int8_t, 128> out{};
-    for (int i = 0; i < 128; i++) {
+    std::array<u_int8_t, 256> out{};
+    for (int i = 0; i < 256; i++) {
         out[i] = FLAG_ALLOWED_IN_NAME;
     }
 
@@ -77,16 +75,16 @@ constexpr std::array<u_int8_t, 128> MAKE_CHARFLAG_ARRAY()
     return out;
 }
 
-constexpr std::array<u_int8_t, 128> CHARFLAG_ARRAY = MAKE_CHARFLAG_ARRAY();
+constexpr std::array<u_int8_t, 256> CHARFLAG_ARRAY = MAKE_CHARFLAG_ARRAY();
 
 constexpr bool IS_INLINE_SPECIAL(int c)
-{ return (c >= 0) && (c < 128) && (CHARFLAG_ARRAY[c] & FLAG_INLINE_SPECIAL); }
+{ return ((c != CHAR_EOF) && (CHARFLAG_ARRAY[static_cast<u_int8_t>(c)] & FLAG_INLINE_SPECIAL)); }
 
 constexpr bool IS_WHITESPACE(int c)
-{ return (c >= 0) && (c < 128) && (CHARFLAG_ARRAY[c] & FLAG_WHITESPACE); }
+{ return ((c != CHAR_EOF) && (CHARFLAG_ARRAY[static_cast<u_int8_t>(c)] & FLAG_WHITESPACE)); }
 
 constexpr bool IS_ALLOWED_IN_NAME(int c)
-{ return (c != CHAR_EOF) && ((c >= 128) || (c < 0) || (CHARFLAG_ARRAY[c] & FLAG_ALLOWED_IN_NAME)); }
+{ return ((c != CHAR_EOF) && (CHARFLAG_ARRAY[static_cast<u_int8_t>(c)] & FLAG_ALLOWED_IN_NAME)); }
 
 /* All range functions assume that the current character is not CHAR_EOF. */
 class iobuff
@@ -268,6 +266,15 @@ public:
     }
 };
 
+/*
+    + Block commands can have other commands as children
+    + When a text command starts, a sequence of Inline commands and text follows until it ends
+    + Inline commands start before their enclosed text and end after their enclosed text
+    + InlineEmpty commands are inline commands that do not enclose any text, they function exactly
+      the same as normal inline commands (and will close immediatelly after they start)
+    + A code command encloses only text until it ends
+    + The parser does not emit Unknown commands, they are only for internal use
+*/
 enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty, Code };
 
 /*
@@ -339,18 +346,30 @@ private:
 
     /* Text Parsing. */
     /*
-        Set to true exactly if the last call to parse_on_text ended on space and we are inside text right now
-        and ctext with only a space should be called before either
+        Set to true exactly if the last call to parse_on_text ended on space and we are inside text
+       right now and ctext with only a space should be called before either
         + a new inline command is started or
         + the next call to parse_on_text sets a character
     */
     bool text_wants_space_next = false;
-    /* Is true exactly if we are in text currently and there was just ctext with only a space called. */
+    /* Is true exactly if we are in text currently and there was just ctext with only a space
+     * called. */
     bool text_had_space_last = false;
-    /* Is true exactly if this is the first time parse_on_text is called while the current text command is active. */
+    /* Is true exactly if this is the first time parse_on_text is called while the current text
+     * command is active. */
     bool text_first_call = true;
 };
 
+/**
+ * @brief Creates a new parser object. The object hosts the memory for all std::string_views
+ * returned by its methods until it is destroyed.
+ * @param stream Text to parse. The entire stream will be read once into memory before parsing
+ * begins.
+ * @param cstart Callback when a command starts. Of type void(std::string_view name, dodo::cmd_type
+ * type, std::string_view args)
+ * @param cend Callback when a command ends. Of type void()
+ * @param ctext Callback to output text. Of type void(std::string_view text)
+ */
 parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
                callback_text ctext)
     : buffer(stream), cstart{cstart}, cend{cend}, ctext{ctext}
@@ -359,7 +378,11 @@ parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end
 
 parser::~parser() {}
 
-/* Parses. Returns true if parsing was successful. Returns false*/
+/* 
+    Parses. Returns true if parsing was successful. Returns false otherwise.
+    If false was returned, the error string is in get_error_message().
+
+*/
 inline bool parser::parse()
 {
     try {
@@ -622,7 +645,8 @@ void parser::parse_on_text()
         inline_end = cmd_stack.top().end_symbol;
     }
 
-    if (text_wants_space_next || (IS_WHITESPACE(buffer.prev()) && !text_had_space_last && !text_first_call)) {
+    if (text_wants_space_next
+        || (IS_WHITESPACE(buffer.prev()) && !text_had_space_last && !text_first_call)) {
         ctext(std::string_view(TEXT_SINGLE_SPACE));
     }
     text_wants_space_next = text_had_space_last = false;
@@ -720,7 +744,8 @@ inline void parser::parse_on_colon()
 
     buffer.next();
     command = parse_cmd_decl();
-    if(text_wants_space_next && (command.type == cmd_type::Inline || command.type == cmd_type::InlineEmpty)) {
+    if (text_wants_space_next
+        && (command.type == cmd_type::Inline || command.type == cmd_type::InlineEmpty)) {
         ctext(std::string_view(TEXT_SINGLE_SPACE));
         text_wants_space_next = false;
     }
