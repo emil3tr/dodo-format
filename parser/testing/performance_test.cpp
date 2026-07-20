@@ -7,14 +7,16 @@
 #include <chrono>
 #include <cstdio>
 
-int acc = 0;
+std::size_t acc = 0;
+std::size_t bcc = 0;
 
 void s(std::string_view n, dodo::cmd_type t, std::string_view a) {
     acc += n.length();
+    acc += a.length();
 }
 
 void e() {
-    acc++;
+    bcc++;
 }
 
 void t(std::string_view t) {
@@ -42,6 +44,9 @@ int main() {
     p.parse(); 
     std::chrono::time_point end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> dur = (end - start);
-    std::cout << "\nTime: " << dur << "\n";
+
+    std::cout << "\nChars / Ends: " << acc << " / " << bcc <<"\n";
+    std::cout << "Time: " << dur << "\n";
+    istr.close();
     std::remove("test_text.dodo");
 }
