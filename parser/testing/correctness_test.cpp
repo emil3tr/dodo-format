@@ -22,7 +22,7 @@ bool newl = false;
 const std::filesystem::path in_dir_path("in");
 const std::filesystem::path out_dir_path("out");
 
-const std::string sys_string{"diff " TEMP_NAME " "}; 
+const std::string sys_string{"diff " TEMP_NAME " "};
 
 void print_indent()
 {
@@ -41,8 +41,7 @@ void print_na(std::string_view n, std::string_view a)
 
 void s(std::string_view n, dodo::cmd_type t, std::string_view a)
 {
-    
-    if(newl) {
+    if (newl) {
         ostr << "\n";
         newl = false;
     }
@@ -86,49 +85,51 @@ void e()
 
 void t(std::string_view t) { ostr << t; }
 
-bool try_compare(const std::filesystem::directory_entry& file) {
+bool try_compare(const std::filesystem::directory_entry& file)
+{
     std::filesystem::path in_path(file.path());
     std::filesystem::path out_path(out_dir_path / in_path.filename());
-        if(!std::filesystem::exists(out_path)) {
-            std::cout << "Error, file found in 'in' but not 'out'.";
-            return 1;
-        }
-        std::ifstream istr(in_path);
-        ostr = std::ofstream(TEMP_NAME);
-        if(!istr || !ostr) {
-            std::cout << "Error, could not open files.";
-            return 1;
-        }
+    if (!std::filesystem::exists(out_path)) {
+        std::cout << "Error, file found in 'in' but not 'out'.";
+        return 1;
+    }
+    std::ifstream istr(in_path);
+    ostr = std::ofstream(TEMP_NAME);
+    if (!istr || !ostr) {
+        std::cout << "Error, could not open files.";
+        return 1;
+    }
 
-        std::cout << "### Testing file " << in_path.filename() << " ###\n";
+    std::cout << "### Testing file " << in_path.filename() << " ###\n";
 
-        dodo::parser p(istr, s, e, t);
-        p.parse();
-        istr.close();
-        ostr.close();
+    dodo::parser p(istr, s, e, t);
+    p.parse();
+    istr.close();
+    ostr.close();
 
-        std::string cmd{sys_string};
-        cmd.append(out_path.string());
-        int out = std::system(cmd.c_str());
-        std::remove(TEMP_NAME);
-        if(out) {
-            std::cout << "### Test failed on file " << in_path.filename() << ". See error above. ###\n";  
-        }
-        return out;
+    std::string cmd{sys_string};
+    cmd.append(out_path.string());
+    int out = std::system(cmd.c_str());
+    std::remove(TEMP_NAME);
+    if (out) {
+        std::cout << "### Test failed on file " << in_path.filename() << ". See error above. ###\n";
+    }
+    return out;
 }
 
 int main(int argc, char** argv)
 {
     int retval = 0;
-    if(!std::filesystem::exists(in_dir_path) || !std::filesystem::exists(out_dir_path)) {
+    if (!std::filesystem::exists(in_dir_path) || !std::filesystem::exists(out_dir_path)) {
         std::cout << "Error, 'in' our 'out' folder do not exist.\n";
         return 1;
     }
 
-    for(const std::filesystem::directory_entry& file : std::filesystem::directory_iterator(in_dir_path)) {
-        if(try_compare(file)) {
+    for (const std::filesystem::directory_entry& file :
+         std::filesystem::directory_iterator(in_dir_path)) {
+        if (try_compare(file)) {
             retval = 1;
-        }    
+        }
     }
     return retval;
 }

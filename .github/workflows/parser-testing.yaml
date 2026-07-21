@@ -1,0 +1,19 @@
+name: C++ Tests
+
+on:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Compile tests
+      run: g++ -std=c++20 -Wall -o parser/testing/correctness_test parser/testing/correctness_test.cpp
+
+    - name: Run tests
+      run: ./correctness_test
