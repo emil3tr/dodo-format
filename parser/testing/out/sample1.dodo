@@ -1,0 +1,23 @@
+:text:This is a paragraph with some not so ideal spacing but it should be fine! Some more sample text.
+:text::b{Inline} commands should work :i{just fine} and we can nest them too: :i1{:i2{}}!
+:text:Short :*{form} and :-{form} and :={form}.
+:h1:
+  :text:This is heading
+:text:Listing my favourite foods here:
+:ul:
+  :text:ice cream
+  :text:chocolate
+  :text:sugar
+:text:And now my least favourite ones:
+:list:
+  :text:cabbage
+  :text:salad
+  :text:carrots
+  :list:
+    :text:nested
+:h2:
+  :text:Another heading
+  :text:Well, let's continue here. Or here. Or here.
+  :a:
+    :b:
+  :c:
