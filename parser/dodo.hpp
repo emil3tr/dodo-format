@@ -1,3 +1,10 @@
+/**
+ * A Library to parse text in the dodo format. Interesting to the user are
+ * + class parser
+ * + enum class cmd_type
+ * + functions is_textual, is_inline, is_block
+ */
+
 #pragma once
 
 #include <algorithm>
@@ -262,16 +269,34 @@ public:
     }
 };
 
-/*
-    + Block commands can have other commands as children
-    + When a text command starts, a sequence of Inline commands and text follows until it ends
-    + Inline commands start before their enclosed text and end after their enclosed text
-    + InlineEmpty commands are inline commands that do not enclose any text, they function exactly
-      the same as normal inline commands (and will close immediatelly after they start)
-    + A code command encloses only text until it ends
-    + The parser does not emit Unknown commands, they are only for internal use
-*/
+/**
+ * Specifies the type of a command.
+ * + Text commands directly enclose text and Inline or InlineEmpty commands
+ * + Code commands only directly enclose text
+ * + Block commands directly enclose Text, Block and Code commands
+ * + Inline commands directly enclose text or other Inline commands
+ * + InlineEmpty commands enclose nothing
+ * + Unknown is only used internally and will never appear as an output
+ * 
+ * The callback function to output text is only called while a text or code command are
+ * active. Note that Text / Code commands are functionally equivalent, but Code 
+ * commands will only contain text. Also Inline / InlineEmpty commands are functionally
+ * equivalent, but InlineEmpty commands are closed immediatelly.
+ */
 enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty, Code };
+
+/**
+ * True exactly for Text and Code.
+ */
+inline constexpr bool is_textual(cmd_type t) {return (t == cmd_type::Text || t == cmd_type::Code);}
+/**
+ * True exactly for Inline and InlineEmpty.
+ */
+inline constexpr bool is_inline(cmd_type t) {return (t == cmd_type::Inline || t == cmd_type::InlineEmpty);}
+/**
+ * True exactly for Block.
+ */
+inline constexpr bool is_block(cmd_type t) {return (t == cmd_type::Block);}
 
 /*
     Holds information about a command. For an inline command, end_symbol is the symbol it ends on.
@@ -280,6 +305,7 @@ enum class cmd_type { Block, Inline, Text, Unknown, InlineEmpty, Code };
 class cmd
 {
 public:
+    enum class type {Inline, InlineEmpty, Text, Code, Block, Unknown};
     std::string_view name;
     std::size_t indent{0};
     char end_symbol{'\0'};
@@ -296,6 +322,9 @@ public:
     }
 };
 
+/**
+ * A class to hold memory and methods related to parsing.
+ */
 class parser
 {
     using callback_cmd_start
@@ -305,12 +334,16 @@ class parser
     using callback_error = std::function<void(std::string msg)>;
 
 public:
-    parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
-           callback_text ctext, std::size_t estimated_size);
+    parser(std::istream& stream, std::size_t estimated_size);
     ~parser();
 
-    bool parse();
+    bool parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback,
+    std::invocable<> auto&& end_callback,
+    std::invocable<std::string_view> auto&& text_callback);
 
+    /**
+     * Returns an error message. In case parsing failed, it will contain useful information.
+     */
     std::string get_error_message() { return error_string; };
 
 private:
@@ -359,30 +392,34 @@ private:
 /**
  * @brief Creates a new parser object. The object hosts the memory for all std::string_views
  * returned by its methods until it is destroyed.
- * @param stream Text to parse. The entire stream will be read once into memory before parsing
- * begins.
- * @param cstart Callback when a command starts. Of type void(std::string_view name, dodo::cmd_type
- * type, std::string_view args)
- * @param cend Callback when a command ends. Of type void()
- * @param ctext Callback to output text. Of type void(std::string_view text)
+ * @param stream Text to parse. The entire stream will be read once into memory when the object
+ * is constructed. 
  * @param estimated_size (optional) estimated size of stream (should be larger than actual size by
- * at least +4 since parser may add some chars)
+ * at least +4 since parser may add some chars).
  */
-parser::parser(std::istream& stream, callback_cmd_start cstart, callback_cmd_end cend,
-               callback_text ctext, std::size_t estimated_size = (32 * 1024))
+parser::parser(std::istream& stream, std::size_t estimated_size = (32 * 1024))
     : buffer(stream, estimated_size), cstart(cstart), cend(cend), ctext(ctext)
 {
 }
 
 parser::~parser() {}
 
-/*
-    Parses. Returns true if parsing was successful. Returns false otherwise.
-    If false was returned, the error string is in get_error_message().
-
-*/
-inline bool parser::parse()
+/**
+ * @brief Parses. Returns true if parsing was successful. Returns false otherwise. 
+ * If false was returned, the error string is in get_error_message(). Note that parsing
+ * only aborts once an error is found, which means callbacks are issued normall until that point.
+ * @param start_callback Callback when a command starts. Of type void(std::string_view name, dodo::cmd_type
+ * type, std::string_view args)
+ * @param end_callback Callback when a command ends. Of type void()
+ * @param text_callback Callback to output text. Of type void(std::string_view text)
+ */
+inline bool parser::parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback,
+    std::invocable<> auto&& end_callback,
+    std::invocable<std::string_view> auto&& text_callback)
 {
+    cstart = start_callback;
+    cend = end_callback;
+    ctext = text_callback;
     try {
         while (true) {
             buffer.skip_while(IS_WHITESPACE, true);

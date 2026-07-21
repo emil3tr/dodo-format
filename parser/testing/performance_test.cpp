@@ -40,8 +40,8 @@ int main() {
     std::ifstream istr("test_text.dodo");
 
     std::chrono::time_point start = std::chrono::high_resolution_clock::now();
-    dodo::parser p(istr, s, e, t);
-    p.parse(); 
+    dodo::parser p(istr);
+    p.parse(s, e, t); 
     std::chrono::time_point end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> dur = (end - start);
 

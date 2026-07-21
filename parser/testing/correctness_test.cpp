@@ -105,8 +105,8 @@ bool try_compare(const std::filesystem::directory_entry& file)
     newl = false;
     stack = std::stack<cmd_type>();
     indent = 0;
-    dodo::parser p(istr, s, e, t);
-    p.parse();
+    dodo::parser p{istr};
+    p.parse(s, e, t);
     istr.close();
     ostr.close();
 
