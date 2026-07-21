@@ -1,0 +1,13 @@
+:a[arg1:::]
+
+:a[   arg2   ]
+
+:a[arg3]]
+
+:::[arg4]:::
+
+:a[arg5]:
+
+:a][text][]
+
+:inline[arg6]{text}
