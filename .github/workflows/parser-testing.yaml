@@ -3,6 +3,7 @@ name: C++ Tests
 on:
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   build-and-test:
@@ -16,4 +17,4 @@ jobs:
       run: g++ -std=c++20 -Wall -o parser/testing/correctness_test parser/testing/correctness_test.cpp
 
     - name: Run tests
-      run: ./correctness_test
+      run: ./parser/testing/correctness_test
