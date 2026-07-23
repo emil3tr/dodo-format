@@ -83,7 +83,11 @@ void e()
     stack.pop();
 }
 
-void t(std::string_view t) { ostr << t; }
+void t(std::span<std::string_view> s) {
+    for(std::string_view v : s) {
+        ostr << v;
+    }
+}
 
 bool try_compare(const std::filesystem::directory_entry& file)
 {

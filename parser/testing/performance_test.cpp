@@ -19,8 +19,10 @@ void e() {
     bcc++;
 }
 
-void t(std::string_view t) {
-    acc += t.length();
+void t(std::span<std::string_view> s) {
+    for(std::string_view v : s) {
+        acc += v.length();
+    }
 }
 
 int main() {

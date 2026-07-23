@@ -142,7 +142,7 @@ public:
             cursor = buffer_end;
             return false;
         }
-        if (get() == CHAR_NEWLINE) {
+        if (prev() == '\n') {
             current_indent = 0;
             current_line++;
         } else {
@@ -200,7 +200,7 @@ public:
     inline bool find(std::convertible_to<u_int8_t> auto... cs)
     {
         ((temp_array[static_cast<u_int8_t>(cs)] = true), ...);
-        if (!has) {
+        if (!has()) {
             return false;
         }
         while (!temp_array[static_cast<u_int8_t>(get())] && next()) {}
@@ -322,7 +322,7 @@ public:
 
     bool parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback,
                std::invocable<> auto&& end_callback,
-               std::invocable<std::string_view> auto&& text_callback);
+               std::invocable<std::span<std::string_view>> auto&& text_callback);
 
     /**
      * Returns an error message. In case parsing failed, it will contain useful information.
@@ -334,7 +334,8 @@ private:
     inbuff buffer;
     std::vector<std::string_view> output_buffer{};
 
-    inline void output_add(std::string_view v) { output_buffer.push_back(v); }
+    inline void output_add(std::string_view v) { 
+        if(!v.empty()) output_buffer.push_back(v); }
 
     inline void output_flush(std::invocable<std::span<std::string_view>> auto&& text_callback)
     {
@@ -348,33 +349,41 @@ private:
     /**
      * Default = nothing about state known
      * CommandHere = cursor on colon which starts a command
-     * TextHere = cursor on character that is part of text
+     * TextContinues = cursor on character that is part of text and active
      * EndCommand = cursor after :; which ends current command
      * StreamEnds = stream has no characters anymore
      * Error = error
      * InlineEnds = cursor on char after inline ender and current inline command ends
      * TextEnds = current text command ends and cursor on char after it
      * ColonHere = cursor on colon, but we have not checked what it means yet
+     * TextStarts = text starts on this character (textual character) and is not active yet
      */
     enum class status {
         Default,
-        CommandHere,
-        TextHere,
+        CommandStarts,
+        TextContinues,
         EndCommand,
         StreamEnds,
         Error,
         TextEnds,
         InlineEnds,
-        ColonHere
+        ColonHere,
+        TextStarts
     };
-    status current_status{Default};
+    status current_status{status::Default};
 
     /* Stack. */
     std::stack<cmd> cmd_stack;
-    void start_command(cmd command);
-    void end_command();
-    void end_text();
-    void end_all_commands();
+    void start_command(
+        cmd command,
+        std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback,
+    std::invocable<> auto&& end_callback);
+    void end_command(std::invocable<> auto&& end_callback);
+    void end_text(std::invocable<> auto&& end_callback);
+    void end_all_commands(std::invocable<> auto&& end_callback);
+    char current_inline_ender();
+void start_text(std::size_t indent,
+    std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback, std::invocable<> auto&& end_callback);
 
     /* Error handling*/
     enum class error_t {
@@ -383,7 +392,7 @@ private:
 
     };
     std::string_view error_info{};
-    error_t error_type{None};
+    error_t error_type{error_t::None};
 
     /* Parsing. */
     cmd parse_name();
@@ -422,45 +431,66 @@ parser::~parser() {}
 inline bool
 parser::parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback,
               std::invocable<> auto&& end_callback,
-              std::invocable<std::string_view> auto&& text_callback)
+              std::invocable<std::span<std::string_view>> auto&& text_callback)
 {
+    cmd command;
     while (true) {
         switch (current_status) {
         case status::Default:
-            if(buffer.skip_while(IS_WHITESPACE, true)) {
-                current_status = (IS_TEXTUAL(buffer.get()) ? status::TextHere : status::ColonHere);
+            if (buffer.skip_while(IS_WHITESPACE, true)) {
+                current_status = (IS_TEXTUAL(buffer.get()) ? status::TextStarts : status::ColonHere);
             } else {
                 current_status = status::StreamEnds;
             }
             break;
-        case status::CommandHere:
+        case status::CommandStarts:
+            buffer.next();
+            command = parse_cmd_decl();
+            start_command(command, start_callback, end_callback);
+            switch(command.type) {
+                case cmd_type::Code:
+                    current_status = parse_code(command.end_symbol);
+                    output_flush(text_callback);
+                    end_command(end_callback);
+                    break;
+                case cmd_type::Inline:
+                case cmd_type::InlineEmpty:
+                case cmd_type::Text:
+                    current_status = status::TextContinues;
+                    break;
+                default:
+                    current_status = status::Default;
+                    break;
+            }
+            break;
         case status::EndCommand:
-        case status::TextHere:
+            end_command(end_callback);
+            current_status = status::Default;
+            break;
+        case status::TextContinues:
+            current_status = parse_text(current_inline_ender());
+            output_flush(text_callback);
+            break;
         case status::StreamEnds:
+            end_all_commands(end_callback);
+            return true;
         case status::TextEnds:
+            end_text(end_callback);
+            current_status = status::Default;
+            break; 
         case status::InlineEnds:
-            end_command(); //we call cend ?!
-            current_status = status::TextHere;
+            end_command(end_callback);
+            current_status = status::TextContinues;
             break;
         case status::ColonHere:
             current_status = parse_colon();
             break;
+        case status::TextStarts:
+            start_text(buffer.indent(), start_callback, end_callback);
+            current_status = status::TextContinues;
+            break;
         case status::Error:
             return false;
-        }
-    }
-
-    while (true) {
-        buffer.skip_while(IS_WHITESPACE, true);
-        switch (buffer.get()) {
-        case CHAR_COLON:
-            parse_on_colon();
-            break;
-        case CHAR_EOF:
-            end_all_commands();
-            return true;
-        default:
-            parse_on_text();
         }
     }
 }
@@ -486,55 +516,80 @@ std::string_view parser::parse_arg()
     If an inline or inline empty command is started, also starts a text command before it with the
    same indent.
 */
-void parser::start_command(cmd command)
+void parser::start_command(
+    cmd command, std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback, std::invocable<> auto&& end_callback)
 {
     if (command.type == cmd_type::Inline || command.type == cmd_type::InlineEmpty) {
         if (cmd_stack.empty()
             || (cmd_stack.top().type != cmd_type::Inline
                 && cmd_stack.top().type != cmd_type::Text)) {
-            start_command(cmd::make_text(command.indent));
+            start_command(cmd::make_text(command.indent), start_callback, end_callback);
         }
         cmd_stack.push(command);
-        cstart(command.name, command.type, command.arg);
+        start_callback(command.name, command.type, command.arg);
         if (command.type == cmd_type::InlineEmpty) {
-            end_command();
+            end_command(end_callback);
         }
         return;
     }
-    end_text();
+    end_text(end_callback);
     while (cmd_stack.size() > 0 && cmd_stack.top().indent >= command.indent) {
-        end_command();
+        end_command(end_callback);
     }
     cmd_stack.push(command);
-    cstart(command.name, command.type, command.arg);
+    start_callback(command.name, command.type, command.arg);
     return;
 }
 
 /* Ends current command on stack. Will only end exactly one command. */
-inline void parser::end_command()
+inline void parser::end_command(std::invocable<> auto&& end_callback)
 {
+    end_callback();
     cmd_stack.pop();
 }
 
 /* Ends a current text command. Also clears all variables for text parsing. Does nothing if there is
  * no text command active. */
-void parser::end_text()
+void parser::end_text(std::invocable<> auto&& end_callback)
 {
     while (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Inline) {
-        end_command();
+        end_command(end_callback);
     }
     if (!cmd_stack.empty() && cmd_stack.top().type == cmd_type::Text) {
-        end_command();
+        end_command(end_callback);
     }
     return;
 }
 
+/**
+ * @brief If a text command is active, does nothing. Otherwise starts a text command.
+ * @param indent The indent of the text_command
+ */
+inline void parser::start_text(std::size_t indent,
+    std::invocable<std::string_view, cmd_type, std::string_view> auto&& start_callback, std::invocable<> auto&& end_callback)
+{
+    if(cmd_stack.empty() || (cmd_stack.top().type != cmd_type::Inline && cmd_stack.top().type != cmd_type::Text)) {
+        start_command(cmd::make_text(indent), start_callback, end_callback);
+    }
+}
+
 /* Ends all commands on stack. */
-inline void dodo::parser::end_all_commands()
+inline void dodo::parser::end_all_commands(std::invocable<> auto&& end_callback)
 {
     while (!cmd_stack.empty()) {
-        end_command();
+        end_command(end_callback);
     }
+}
+
+/**
+ * @return '\0' if no inline command active, otherwise the inline end symbol
+ */
+inline char parser::current_inline_ender() 
+{
+    if(cmd_stack.empty() || cmd_stack.top().type != cmd_type::Inline) {
+        return '\0';
+    }
+    return cmd_stack.top().end_symbol;
 }
 
 /*
@@ -688,6 +743,7 @@ parser::status parser::parse_code(std::size_t colons_to_end)
         if (did_output && output_buffer.back().ends_with('\n')) {
             output_buffer.back().remove_suffix(1);
         }
+        return status::Default;
     } else {
         error_type = error_t::CodeDoesNotEnd;
         return status::Error;
@@ -716,7 +772,10 @@ parser::status parser::parse_text(char inline_end)
         } else if (buffer.get() == ':') {
             if (!parse_text_edgecases(inline_end)) {
                 output_add(buffer.get_range_before());
-                return status::CommandHere;
+                if(!output_buffer.empty() && output_buffer.back().ends_with(' ')) {
+                    output_buffer.back().remove_suffix(1);
+                }
+                return status::CommandStarts;
             }
         } else if (IS_WHITESPACE(buffer.get())) {
             if (!parse_text_whitespace()) {
@@ -780,23 +839,30 @@ bool parser::parse_text_whitespace()
         return true;
     }
 
-    output_add(buffer.get_range_before());
+    std::string_view temp = buffer.get_range_here();
+
     if (!buffer.skip_while(IS_TAB_SPACE, true)) {
+        temp.remove_suffix(1);
+        output_add(temp);
         return false;
     }
 
     if (!(buffer.get() == '\n')) {
         buffer.start_range();
+        output_add(temp);
         return true;
     }
 
     buffer.next();
     if (!buffer.skip_while(IS_TAB_SPACE, true) || buffer.get() == '\n') {
         buffer.next();
+        temp.remove_suffix(1);
+        output_add(temp);
         return false;
     }
 
     buffer.start_range();
+    output_add(temp);
     return true;
 }
 
@@ -815,28 +881,15 @@ parser::status parser::parse_colon()
         return status::EndCommand;
     case '.':
     case ',':
-        return status::TextHere;
+        return status::TextContinues;
     default:
         if (IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
-            return status::TextHere;
+            return status::TextContinues;
         }
         break;
     }
 
-    return status::CommandHere;
-    ? ? // handle command how
-        buffer.next();
-    command = parse_cmd_decl();
-    if (text_wants_space_next
-        && (command.type == cmd_type::Inline || command.type == cmd_type::InlineEmpty)) {
-        ctext(std::string_view(TEXT_SINGLE_SPACE));
-        text_wants_space_next = false;
-    }
-    start_command(command);
-    if (command.type == cmd_type::Code) {
-        ctext(parse_code(command.end_symbol));
-        end_command();
-    }
+    return status::CommandStarts;
 }
 
 std::string parser::get_error_message()
@@ -847,13 +900,15 @@ std::string parser::get_error_message()
         out = std::string("Code command does not end.");
         break;
     default:
-        out = std::string("No error found.") break;
+        out = std::string("No error found.");
+        break;
     }
     out.append("\n | at line / indent: ")
         .append(std::to_string(buffer.line()))
         .append(" / ")
-        .append(std::to_string(buffer.indent()));
-    .append("\n | Info: ").append(error_info);
+        .append(std::to_string(buffer.indent()))
+        .append("\n | Info: ")
+        .append(error_info);
     return out;
 }
 } // namespace dodo
