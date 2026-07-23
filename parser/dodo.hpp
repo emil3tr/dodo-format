@@ -355,7 +355,8 @@ private:
      * Error = error
      * InlineEnds = cursor on char after inline ender and current inline command ends
      * TextEnds = current text command ends and cursor on char after it
-     * ColonHere = cursor on colon, but we have not checked what it means yet
+     * ColonHere = cursor on colon, but we have not checked what it means yet (and so no text command is active
+     * in case it is an edge case)
      * TextStarts = text starts on this character (textual character) and is not active yet
      */
     enum class status {
@@ -507,8 +508,9 @@ std::string_view parser::parse_arg()
     if (!buffer.find(']')) {
         throw std::runtime_error("Argument does not end.");
     }
+    out = buffer.get_range_before();
     buffer.next();
-    return buffer.get_range_before();
+    return out;
 }
 
 /*
@@ -682,15 +684,20 @@ cmd parser::parse_cmd_decl()
     case '{':
         out.end_symbol = '}';
         out.type = cmd_type::Inline;
+        buffer.next();
         break;
     case ';':
         out.type = cmd_type::InlineEmpty;
+        buffer.next();
+        break;
+    case ':':
+        out.type = cmd_type::Block;
+        buffer.next();
         break;
     default:
         out.type = cmd_type::Block;
         break;
     }
-    buffer.next();
     return out;
 }
 
@@ -705,12 +712,16 @@ parser::status parser::parse_code(std::size_t colons_to_end)
     bool set_indent = false;
     bool did_output = false;
     bool did_end = false;
+    bool skip_first = false;
 
     buffer.start_range();
 
     if (!buffer.skip_while(IS_TAB_SPACE, true)) {
         error_type = error_t::CodeDoesNotEnd;
         return status::Error;
+    }
+    if(buffer.get() == '\n') {
+        skip_first = true;
     }
 
     while (buffer.find(':', '\n')) {
@@ -721,7 +732,12 @@ parser::status parser::parse_code(std::size_t colons_to_end)
                 break;
             }
         } else { // found a newline
+            if(!skip_first) {
+
             output_add(buffer.get_range_here());
+            } else {
+                skip_first = false;
+            }
             did_output = true;
             buffer.next();
             if (set_indent) {
@@ -785,6 +801,7 @@ parser::status parser::parse_text(char inline_end)
             buffer.next();
         }
     }
+    output_add(buffer.get_range_before());
     return status::StreamEnds;
 }
 
@@ -804,8 +821,8 @@ bool parser::parse_text_edgecases(char inline_end)
     }
     switch (buffer.peek()) {
     case '.':
-        output_add(buffer.get_range_before());
-        buffer.next();
+        output_add(buffer.get_range_here());
+        buffer.next(2);
         buffer.start_range();
         return true;
     case ',':
@@ -881,10 +898,10 @@ parser::status parser::parse_colon()
         return status::EndCommand;
     case '.':
     case ',':
-        return status::TextContinues;
+        return status::TextStarts;
     default:
         if (IS_WHITESPACE(buffer.peek()) && !IS_WHITESPACE(buffer.prev())) {
-            return status::TextContinues;
+            return status::TextStarts;
         }
         break;
     }
