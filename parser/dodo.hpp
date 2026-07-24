@@ -135,20 +135,23 @@ public:
 
     inline bool has() { return (cursor >= buffer_start && cursor < buffer_end); }
 
+    /**
+     * To work correctly, the current character is not allowed to be overwritten!
+     */
     inline bool next()
     {
-        cursor++;
         if (!has()) [[unlikely]] {
-            cursor = buffer_end;
             return false;
         }
-        if (prev() == '\n') {
+        if(get() == '\n') {
             current_indent = 0;
             current_line++;
         } else {
             current_indent++;
         }
-        return true;
+        cursor++;
+        
+        return has();
     }
 
     inline bool next(std::size_t count)
@@ -178,6 +181,13 @@ public:
     /* Starts a new range on and including the current_char. */
     inline void start_range() { range_start = cursor; }
 
+    /**
+     * Starts a new range on the current char - before offset.
+     */
+    inline void start_range(std::size_t before_offset) {
+        range_start = cursor - before_offset;
+    }
+
     inline std::string_view get_range_here() { return std::string_view(range_start, cursor + 1); }
 
     inline std::string_view get_range_before() { return std::string_view(range_start, cursor); }
@@ -193,7 +203,7 @@ public:
         Overwrites the current char in the range with another char.
         Assumes the current range is not paused.
     */
-    inline void overwrite(char c) { *cursor = c; }
+    inline void overwrite(char c, int offset) { *(cursor + offset) = c; }
 
     /* Moves the current char forward until EOF is reached or it sits on one of the passed
      * characters. Returns true if a char was found, false if EOF was reached. */
@@ -404,6 +414,11 @@ void start_text(std::size_t indent,
     status parse_text(char inline_end);
     bool parse_text_whitespace();
     bool parse_text_edgecases(char inline_end);
+
+    bool text_before = false;
+    /* True iff there is text and the top string_view on the output buffer has a trailing space. */
+    bool text_trailing_space = false;
+    bool delayed_flush = false;
 };
 
 /**
@@ -434,7 +449,7 @@ parser::parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&
               std::invocable<> auto&& end_callback,
               std::invocable<std::span<std::string_view>> auto&& text_callback)
 {
-    cmd command;
+    cmd command{};
     while (true) {
         switch (current_status) {
         case status::Default:
@@ -447,6 +462,21 @@ parser::parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&
         case status::CommandStarts:
             buffer.next();
             command = parse_cmd_decl();
+            if(delayed_flush) {
+                delayed_flush = false;
+                if(is_inline(command.type)) {
+                    output_flush(text_callback);
+                    text_trailing_space = false;
+                    current_status = status::TextContinues;
+                    start_command(command, start_callback, end_callback);
+                    break;
+                } else {
+                    if(text_trailing_space) {
+                        output_buffer.back().remove_suffix(1);
+                        output_flush(text_callback);
+                    }
+                }
+            }
             start_command(command, start_callback, end_callback);
             switch(command.type) {
                 case cmd_type::Code:
@@ -457,6 +487,7 @@ parser::parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&
                 case cmd_type::Inline:
                 case cmd_type::InlineEmpty:
                 case cmd_type::Text:
+                    text_before = text_trailing_space = false;
                     current_status = status::TextContinues;
                     break;
                 default:
@@ -470,7 +501,14 @@ parser::parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&
             break;
         case status::TextContinues:
             current_status = parse_text(current_inline_ender());
+            if(current_status != status::CommandStarts) {
+                if(text_trailing_space) {
+                    output_buffer.back().remove_suffix(1);
+                }
             output_flush(text_callback);
+            } else {
+                delayed_flush = true;
+            }
             break;
         case status::StreamEnds:
             end_all_commands(end_callback);
@@ -487,6 +525,7 @@ parser::parse(std::invocable<std::string_view, cmd_type, std::string_view> auto&
             current_status = parse_colon();
             break;
         case status::TextStarts:
+        text_before = text_trailing_space = false;
             start_text(buffer.indent(), start_callback, end_callback);
             current_status = status::TextContinues;
             break;
@@ -778,19 +817,16 @@ parser::status parser::parse_code(std::size_t colons_to_end)
  */
 parser::status parser::parse_text(char inline_end)
 {
-    buffer.skip_while(IS_TAB_SPACE, true);
     buffer.start_range();
     while (buffer.has()) {
         if (buffer.get() == inline_end) {
             output_add(buffer.get_range_before());
             buffer.next();
+            text_trailing_space = false;
             return status::InlineEnds;
         } else if (buffer.get() == ':') {
             if (!parse_text_edgecases(inline_end)) {
                 output_add(buffer.get_range_before());
-                if(!output_buffer.empty() && output_buffer.back().ends_with(' ')) {
-                    output_buffer.back().remove_suffix(1);
-                }
                 return status::CommandStarts;
             }
         } else if (IS_WHITESPACE(buffer.get())) {
@@ -798,8 +834,10 @@ parser::status parser::parse_text(char inline_end)
                 return status::TextEnds;
             }
         } else [[likely]] {
+            text_trailing_space = false;
             buffer.next();
         }
+        text_before = true;
     }
     output_add(buffer.get_range_before());
     return status::StreamEnds;
@@ -811,6 +849,8 @@ parser::status parser::parse_text(char inline_end)
  */
 bool parser::parse_text_edgecases(char inline_end)
 {
+    bool temp_trailing = text_trailing_space;
+    text_trailing_space = false;
     if (!buffer.can_peek()) {
         buffer.next();
         return true;
@@ -840,6 +880,8 @@ bool parser::parse_text_edgecases(char inline_end)
         buffer.start_range();
         return true;
     }
+
+    text_trailing_space = temp_trailing; 
     return false;
 }
 
@@ -850,36 +892,41 @@ bool parser::parse_text_edgecases(char inline_end)
  */
 bool parser::parse_text_whitespace()
 {
-    if (buffer.can_peek() && IS_TEXTUAL(buffer.peek())) {
-        buffer.overwrite(' ');
+    if (text_before && !text_trailing_space && buffer.can_peek() && IS_TEXTUAL(buffer.peek())) {
         buffer.next();
+        buffer.overwrite(' ', -1);
         return true;
     }
 
-    std::string_view temp = buffer.get_range_here();
+    if(text_before) {
 
+    output_add(buffer.get_range_here());
+    text_trailing_space = true;
+    } 
+
+    if(buffer.get() == '\n') {
+        buffer.next();
+        buffer.overwrite(' ', -1);
+    } else {
     if (!buffer.skip_while(IS_TAB_SPACE, true)) {
-        temp.remove_suffix(1);
-        output_add(temp);
         return false;
     }
 
     if (!(buffer.get() == '\n')) {
         buffer.start_range();
-        output_add(temp);
         return true;
     }
 
     buffer.next();
+
+    }
+
     if (!buffer.skip_while(IS_TAB_SPACE, true) || buffer.get() == '\n') {
         buffer.next();
-        temp.remove_suffix(1);
-        output_add(temp);
         return false;
     }
 
     buffer.start_range();
-    output_add(temp);
     return true;
 }
 
