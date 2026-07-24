@@ -1,2 +1,2 @@
-:text:aa:i{bb}aa: i{bb} aa:i{ bb}aa:i{bb }aa
+:text:aa:i{bb}aa: i{bb} aa:i{ bb}aa:i{bb }aa :i{ bb } aa :i{ bb } aa
 :text:A B C D E D E F G H
