@@ -702,7 +702,7 @@ cmd parser::parse_cmd_decl()
 
     if (out.name.empty()) {
         if (buffer.has() && buffer.get() == '{') {
-            out.name = std::string("link");
+            out.name = std::string_view(NAME_LINK);
             out.type = cmd_type::Inline;
             out.end_symbol = '}';
             buffer.next();
@@ -878,6 +878,7 @@ bool parser::parse_text_edgecases(char inline_end)
         output_add(buffer.get_range_before());
         buffer.next();
         buffer.start_range();
+        buffer.next();
         return true;
     }
 

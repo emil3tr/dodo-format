@@ -1,1 +1,9 @@
-:text::::::   , :
+:text::::::   ,
+:block:
+  :text:a
+:block:
+  :text:a
+  :text:b
+  :text:c
+  :block:
+    :text:d
