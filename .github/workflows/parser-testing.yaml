@@ -14,10 +14,9 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Compile tests
-      run: g++ -std=c++20 -Wall -o parser/testing/correctness_test parser/testing/correctness_test.cpp
-
-    - name: Move to folder
-      run: cd parser/testing
+      working-directory: parser/testing
+      run: g++ -std=c++20 -Wall -o correctness_test correctness_test.cpp
 
     - name: Run tests
+      working-directory: parser/testing
       run: ./correctness_test
