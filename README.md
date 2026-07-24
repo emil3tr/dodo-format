@@ -24,16 +24,9 @@ The dodo semantics specification gives meaning to some standard commands. This m
   
 # Development
 
-The parser currently works for the tested inputs. However, it still needs
+The parser is working and usable, but might still have minor bugs.
 
-+ more testing for correctness and edge cases.
-+ a better buffer interface.
-+ a lot of rewriting to improve readability and code quality.
-+ once the buffer interface is clear, major rewriting of the main parsing functions to improve speed
-  and strategies to reduce copying.
-+ specialized algorithms to make the common case fast.
-
-The format also still misses
+The format still misses
 
 + a finished syntax guide.
 + a finished semantics guide.
